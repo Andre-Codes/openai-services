@@ -1,0 +1,51 @@
+{
+    "app_ui": {
+        "app_title": "Troubleshooter",
+        "title_emoji": "computer",
+        "subheader": "What can I troubleshoot for you?"
+    },
+    "response_formats": {
+        "markdown": {
+            "instruct": "Respond using markdown style formatting. Use the # character for headers, with at least one space in between the header and the next text. Embed URls to appropriate sources. Format code blocks with three backticks and surround single line code with single backticks. ",
+            "table_styles": {
+                "bullets": "Also, format any table in the form of a bullet outline. The description for each param will be on a new line and indented",
+                "pipes": "Also, format any table using these instructions: To add a table, use three or more hyphens (---) to create each column header, and use pipes (|) to separate each column. For compatibility, add a pipe on either end of the row"
+            }
+        },
+        "html": {
+            "instruct": "Respond in HTML format. Create a button (or multiple) at top linked to the API site, or embeded direct URLs for the related modules and/or functions used. Use HTML tables as requested and format them with borders. Use other HTML features to make the page visually appealing and engaging. When displaying any image, use related API documentation sources to find them.",
+            "css": "Put any code inside <pre><code> tag, using the following CSS for styling: code { font-family: 'Fira Code', monospace; background-color: #282a36; color: #50fa7b; padding: 1px; border-radius: 3px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2); } pre { overflow: auto; background-color: #282a30; color: #f8f8f2; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2); }"
+        }
+    },
+    "role_contexts": {
+        "process_ticket": {
+            "system_role": "You're an expert IT support technician who provides solutions to problems.",
+            "instruct": "The following is an incident ticket created by a user who is explaining the issue/problem. Extract any named entities, keywords, and other information pertinent to the question and for aiding in the solution. Make a concise table of the kewords. Then, provide a few troublshooting steps, as well as any links to sources, e.g. Microsoft, Stack Exchange, etc. ",
+            "instruct_2": "If possible, rovide some powershell commands that might help aid in the solution. Also, go more in depth on troubleshooting steps and possible root causes.",
+            "display_name": "Process Ticket"
+        },
+        "email_service_desk": {
+            "system_role": "You're a helpful assistant who answers questions.",
+            "instruct": "say anything",
+            "display_name": ""
+        }
+    },
+    "explain_levels": [
+        "concise",
+        "comprehensive",
+        "advanced",
+        "dumbed-down",
+        "technical",
+        "pedagogical",
+        "professional",
+        "child-level"
+    ],
+    "comment_levels": [
+        "normal",
+        "concise",
+        "detailed",
+        "verbose",
+        "exhaustive",
+        "pedagogical"
+    ]
+}
