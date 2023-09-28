@@ -2,8 +2,9 @@
 app_ui:
   page_title: "My Webpage"
   title: "App Title"
-  title_emoji: "computer"
+  title_emoji: "question"
   subheader: "What can I do for you?"
+allow_null_prompt: True
 response_formats:
   markdown:
     instruct: "Respond using markdown style formatting. Use the # character for headers, with at least one space in between the header and the next text. Embed URls to appropriate sources. Format code blocks with three backticks and surround single line code with single backticks."
@@ -16,14 +17,29 @@ response_formats:
     css: "Put any code inside <pre><code> tag, using the following CSS for styling: code { font-family: 'Fira Code', monospace; background-color: #282a36; color: #50fa7b; padding: 1px; border-radius: 3px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2); } pre { overflow: auto; background-color: #282a30; color: #f8f8f2; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2); }"
 role_contexts:
   role_1:
-    system_role: "You're a..."
-    instruct: "For the following..."
-    instruct_2: "Regarding the previous response..."
-    display_name: ""
+    enable: True
+    system_role: "You're a helpful assistant"
+    instruct: "Repeat: 'Create some instructions for me...'"
+    instruct_2: "Generate a random joke..."
+    display_name: "Role 1"
   role_2:
-    system_role: "You're a helpful assistant..."
+    enable: True
+    system_role: "You're a helpful assistant"
+    instruct: "Repeat: 'Create some instructions for me...'"
+    instruct_2: "Generate a random fact"
+    display_name: "Role 2"
+  api_explain:
+    system_role: "You're a helpful expert on analyzing library/API documentation."
+    instruct: "For the API/library, provide the description, parameters, attributes, 'returns', code examples. Provide a minimum of 3 examples and the output, increasing in complexity, using various parameters. Make a table to visualize each parameter and definition. If possible, provide several web links from various sources for related material under a 'Sources' section."
+    instruct_2: "Elaborate further on the overall concepts discussed, focusing on the original question. Act as if you are a teacher, providing a lesson to help a student understand. Provide ways to continue learning, resources, 'homework' type things the student can do to learn further."
+    display_name: "API Explanation"
+    API Explanation: "api_explain"
+    button_phrase: "Explain This"
+    prompt_placeholder: "The pandas .agg method..."
+  random:
+    enable: False
+    system_role: "You're a standup comedian."
     instruct: ""
-    instruct_2: ""
-    display_name: ""
+    documentation: "Do not provide any extra comments or explanations about your response or the questions."
 explain_levels: ["concise", "comprehensive", "advanced", "dumbed-down", "technical", "pedagogical", "professional", "child-level"]
 comment_levels: ["normal", "concise", "detailed", "verbose", "exhaustive", "pedagogical"]
