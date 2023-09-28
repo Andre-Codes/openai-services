@@ -3,7 +3,7 @@ import gpt_service as gpt
 
 
 def generate_response(ct, prompt):
-    with st.spinner('...creating a lesson :thought_balloon:'):
+    with st.spinner('...thinking :thought_balloon:'):
         return ct.get_response(prompt=prompt, format_style='markdown')
 
 def handle_file_output(responses, all_response_content):

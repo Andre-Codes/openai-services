@@ -45,7 +45,7 @@ def extra_lesson(user_prompt, role_context, response):
 # Side bar controls
 # Open API Key
 app.api_key = st.sidebar.text_input(
-    label = "Open API Key :key:", 
+    label = "OpenAI API Key :key:", 
     type = "password",
     help = "Get your API key from https://openai.com/"
 ) or app.api_key
