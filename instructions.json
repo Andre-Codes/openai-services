@@ -1,8 +1,8 @@
 {
     "app_ui": {
-        "app_title": "Troubleshooter",
+        "app_title": "App Title",
         "title_emoji": "computer",
-        "subheader": "What can I troubleshoot for you?"
+        "subheader": "What can I do for you?"
     },
     "response_formats": {
         "markdown": {
@@ -18,15 +18,16 @@
         }
     },
     "role_contexts": {
-        "process_ticket": {
-            "system_role": "You're an expert IT support technician who provides solutions to problems.",
-            "instruct": "The following is an incident ticket created by a user who is explaining the issue/problem. Extract any named entities, keywords, and other information pertinent to the question and for aiding in the solution. Make a concise table of the kewords. Then, provide a few troublshooting steps, as well as any links to sources, e.g. Microsoft, Stack Exchange, etc. ",
-            "instruct_2": "If possible, rovide some powershell commands that might help aid in the solution. Also, go more in depth on troubleshooting steps and possible root causes.",
-            "display_name": "Process Ticket"
+        "role_1": {
+            "system_role": "You're a...",
+            "instruct": "For the following...",
+            "instruct_2": "Regarding the previous response...",
+            "display_name": ""
         },
-        "email_service_desk": {
-            "system_role": "You're a helpful assistant who answers questions.",
-            "instruct": "say anything",
+        "role_2": {
+            "system_role": "You're a helpful assistant...",
+            "instruct": "",
+            "instruct_2": "",
             "display_name": ""
         }
     },
