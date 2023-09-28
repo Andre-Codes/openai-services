@@ -118,11 +118,18 @@ class CodeTutor:
     def _build_prompt(self):
         self.system_role, user_content = self._handle_role_instructions(self.prompt)
 
-        response_instruct = self.CONFIG['response_formats'][self.format_style]['instruct']
+        response_formats = self.CONFIG['response_formats']
+        format_style = response_formats.get(self.format_style, {})
+        response_instruct = format_style.get('instruct', '')
+
         if self.format_style == 'markdown':
-            response_instruct += self.CONFIG['response_formats']['markdown']['table_styles'][self.MD_TABLE_STYLE]
+            md_table_style = format_style.get('table_styles', {}).get(self.MD_TABLE_STYLE, '')
+            response_instruct += md_table_style
         elif self.format_style == 'html':
-            response_instruct += self.CONFIG['response_formats']['html']['css']
+            use_css = format_style.get('use_css', False)
+            if use_css:
+                css = format_style.get('css', '')
+                response_instruct += css
 
         self.complete_prompt = f"{response_instruct}; {user_content}"
 
@@ -150,7 +157,7 @@ class CodeTutor:
         system_msg = [{"role": "system", "content": self.system_role}]
         
         # Determine user and assistant messages based on the length of the 'prompt'
-        if len(prompt) > 1:
+        if isinstance(prompt, list) and len(prompt) > 1:
             user_assistant_msgs = [
                 {
                     "role": "assistant" if i % 2 == 0 else "user", 
@@ -181,7 +188,7 @@ class CodeTutor:
             instructions = (
                 f"{self.CONFIG['role_contexts'][self.role_context]['instruct']}"
             )
-            user_content = f"{instructions}; Request: {user_prompt}; {documentation}"
+            user_content = f"{instructions}: {user_prompt}; {documentation}"
 
             system_role = self.CONFIG['role_contexts'][self.role_context]['system_role']
         else:
@@ -193,7 +200,7 @@ class CodeTutor:
     def get_response(self, prompt=None, format_style='markdown'):
         # _build_messages requires prompt to be a list
         # convert prompt to a list if it is not already
-        prompt = [prompt] if not isinstance(prompt, list) else prompt
+        # prompt = [prompt] if not isinstance(prompt, list) else prompt
         self._validate_and_assign_params(prompt, format_style)
         self._build_prompt()
         self._build_messages(prompt)

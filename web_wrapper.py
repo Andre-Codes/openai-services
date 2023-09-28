@@ -35,7 +35,9 @@ st.set_page_config(page_title=page_title, page_icon=title_emoji)
 def extra_lesson(user_prompt, role_context, response):
     with st.spinner('Next lesson...'):
         # get second instruction set for continuing previous converstaion
-        instruct_2 = app.CONFIG['role_contexts'][role_context].get('instruct_2', 'Provide additional details.')
+        role_context = app.CONFIG['role_contexts'].get(role_context, {})
+        default_instruction = 'Provide additional details.'
+        instruct_2 = role_context.get('instruct_2', default_instruction)
         prompt2 = instruct_2
         messages = [user_prompt, response, prompt2]
         return messages
@@ -86,7 +88,7 @@ selected_json_role = roles[selected_friendly_role]
 app.role_context = selected_json_role
 # get the button phrase based on selected role
 button_phrase = (
-    app.CONFIG['role_contexts'][selected_json_role].get('display_name', 'Enter')
+    app.CONFIG['role_contexts'][selected_json_role].get('button_phrase', 'Enter')
 )
 
 # get other app title information
@@ -137,9 +139,8 @@ if answer_button:
             
         if user_prompt is None:
             if app.CONFIG['allow_null_prompt']:
-                user_prompt = 'Tell me anything.'
+                user_prompt = 'Tell me something interesting.'
                 app.role_context = 'random'
-                extra_lesson_toggle = False
             else:
                 st.info('Please provide a prompt...', icon='😑')
 
@@ -149,7 +150,7 @@ if answer_button:
             response, 
             assistant=allow_download, 
             all_response_content=all_response_content,
-            selected_friendly_role=selected_friendly_role,
+            role_name=selected_friendly_role,
             streaming=app.stream
         )
         
@@ -157,12 +158,14 @@ if answer_button:
             prompt_messages = extra_lesson(user_prompt, app.role_context, displayed_response)
             extra_response = generate_response(app, prompt_messages)
             display_response(
-                response, 
+                extra_response, 
                 assistant=True, 
                 all_response_content=all_response_content,
-                selected_friendly_role=selected_friendly_role,
+                role_name=selected_friendly_role,
                 streaming=app.stream
             )
+        
+        app.complete_prompt
         
         st.toast(':teacher: Lesson Complete!', icon='✅')
         
@@ -170,6 +173,6 @@ if answer_button:
         traceback.print_exc()
         st.error(f"""There was an error while the response was being generated.
                  Possible issues: \n
-                 -Incorrect or missing API key\n-No internet connection  \n\n 
+                 -Incorrect or missing API key -No internet connection  \n\n 
                  {e}
                  """, icon='🚨')
