@@ -57,6 +57,7 @@ class CodeTutor:
         explain_level=None,
         temperature=None,
         model="gpt-3.5-turbo",
+        stream=False,
         api_key=os.environ['OPENAI_API_KEY']): # os.environ['OPENAI_API_KEY']
         """
         Initializes the GPTService class with settings to control the prompt and response.
@@ -75,6 +76,9 @@ class CodeTutor:
         
         # Set up API access
         self.api_key = api_key
+        
+        # Turn off/on streaming of response
+        self.stream = stream
                 
         # Set the GPT model
         self.model = model
@@ -136,7 +140,7 @@ class CodeTutor:
                 messages = self.__messages,
                 temperature = self.temperature,
                 top_p = 0.2,
-                stream = True
+                stream = self.stream
             )
         except Exception as e:
             return "Connection to API failed - Verify internet connection or API key"
@@ -165,17 +169,6 @@ class CodeTutor:
         
         # Combine system, user, and assistant messages
         self.__messages = system_msg + user_assistant_msgs
-
-    def get_response(self, prompt=None, format_style='markdown'):
-        # _build_messages requires prompt to be a list
-        # convert prompt to a list if it is not already
-        prompt = [prompt] if not isinstance(prompt, list) else prompt
-        self._validate_and_assign_params(prompt, format_style)
-        self._build_prompt()
-        self._build_messages(prompt)
-        self._make_openai_call()
-        # Return finished response from OpenAI
-        return self.response
     
     def _handle_role_instructions(self, user_prompt):
         if self.role_context != 'basic':
@@ -198,7 +191,18 @@ class CodeTutor:
 
             system_role = INSTRUCTIONS['role_contexts'][self.role_context]['system_role']
         else:
-            system_role = "You're a helpful assistant who answers my questions"
+            system_role = "You're a helpful assistant who answers my questions."
             user_content = user_prompt
 
         return system_role, user_content
+
+    def get_response(self, prompt=None, format_style='markdown'):
+        # _build_messages requires prompt to be a list
+        # convert prompt to a list if it is not already
+        prompt = [prompt] if not isinstance(prompt, list) else prompt
+        self._validate_and_assign_params(prompt, format_style)
+        self._build_prompt()
+        self._build_messages(prompt)
+        self._make_openai_call()
+        # Return finished response from OpenAI
+        return self.response
