@@ -1,5 +1,5 @@
 import streamlit as st
-import gpt_service as gpt
+import openai_service as gpt
 
 
 def generate_response(ct, prompt):

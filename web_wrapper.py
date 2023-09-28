@@ -1,8 +1,7 @@
 import streamlit as st
 import os
-import random
-from gpt_service_helpers import display_response, generate_response
-import gpt_service as gpt
+from web_helpers import display_response, generate_response
+import openai_service as gpt
 import traceback
 
 
