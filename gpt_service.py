@@ -1,16 +1,6 @@
-import os
 import openai
-import json
-import datetime
-import re
+import yaml
 
-# Load instructions from JSON file
-path_web = "/mount/src/code-tutor/web_app/instructions_web.json" # streamlit server path
-path_local = "instructions.json"
-f_path = path_web if os.path.exists(path_web) else path_local
-
-with open(f_path, "r") as f:
-    INSTRUCTIONS = json.load(f)
 
 class CodeTutor:
     """
@@ -58,7 +48,8 @@ class CodeTutor:
         temperature=None,
         model="gpt-3.5-turbo",
         stream=False,
-        api_key=os.environ['OPENAI_API_KEY']): # os.environ['OPENAI_API_KEY']
+        api_key=None, # os.environ['OPENAI_API_KEY']
+        config_path=None):
         """
         Initializes the GPTService class with settings to control the prompt and response.
 
@@ -74,6 +65,9 @@ class CodeTutor:
             model (str, optional): The GPT model name to use. Defaults to "gpt-3.5-turbo".
         """
         
+        with open(config_path, "r") as f:
+            self.CONFIG = yaml.safe_load(f)
+        
         # Set up API access
         self.api_key = api_key
         
@@ -84,16 +78,16 @@ class CodeTutor:
         self.model = model
         
         # Validate and set role_context
-        available_role_contexts = INSTRUCTIONS.get('role_contexts', {}).keys()
+        available_role_contexts = self.CONFIG.get('role_contexts', {}).keys()
         self.role_context = role_context if role_context in available_role_contexts else 'basic'
         
         # Validate and set comment_level
-        comment_levels = INSTRUCTIONS['comment_levels']
+        comment_levels = self.CONFIG['comment_levels']
         self.comment_level = comment_level if comment_level in comment_levels \
             or comment_level is None else 'normal'
         
         # Validate and set explain_level
-        explain_levels = INSTRUCTIONS['explain_levels']
+        explain_levels = self.CONFIG['explain_levels']
         self.explain_level = explain_level if explain_level in explain_levels \
             or explain_level is None else 'concise'
         
@@ -102,17 +96,17 @@ class CodeTutor:
 
     
     def set_md_table_style(self, style):
-        available_table_styles = INSTRUCTIONS['response_formats']['markdown']['table_styles'].keys()
+        available_table_styles = self.CONFIG['response_formats']['markdown']['table_styles'].keys()
         if style not in available_table_styles:
-            raise ValueError(f"Invalid MD_TABLE_STYLE. Available styles: {list(INSTRUCTIONS['table_formatting'].keys())}.")
-        self.MD_TABLE_STYLE = INSTRUCTIONS['response_formats']['markdown']['table_styles'][style]
+            raise ValueError(f"Invalid MD_TABLE_STYLE. Available styles: {list(self.CONFIG['table_formatting'].keys())}.")
+        self.MD_TABLE_STYLE = self.CONFIG['response_formats']['markdown']['table_styles'][style]
         
-    def get_format_styles():
-        available_formats = list(INSTRUCTIONS['response_formats'].keys())
+    def get_format_styles(self):
+        available_formats = list(self.CONFIG['response_formats'].keys())
         print("Available response formats:", available_formats)
          
-    def get_role_contexts():
-        available_role_contexts = list(INSTRUCTIONS['role_contexts'].keys())
+    def get_role_contexts(self):
+        available_role_contexts = list(self.CONFIG['role_contexts'].keys())
         return available_role_contexts
 
     def _validate_and_assign_params(self, prompt, format_style):
@@ -124,11 +118,11 @@ class CodeTutor:
     def _build_prompt(self):
         self.system_role, user_content = self._handle_role_instructions(self.prompt)
 
-        response_instruct = INSTRUCTIONS['response_formats'][self.format_style]['instruct']
+        response_instruct = self.CONFIG['response_formats'][self.format_style]['instruct']
         if self.format_style == 'markdown':
-            response_instruct += INSTRUCTIONS['response_formats']['markdown']['table_styles'][self.MD_TABLE_STYLE]
+            response_instruct += self.CONFIG['response_formats']['markdown']['table_styles'][self.MD_TABLE_STYLE]
         elif self.format_style == 'html':
-            response_instruct += INSTRUCTIONS['response_formats']['html']['css']
+            response_instruct += self.CONFIG['response_formats']['html']['css']
 
         self.complete_prompt = f"{response_instruct}; {user_content}"
 
@@ -175,21 +169,21 @@ class CodeTutor:
             comment_level = f"Provide {self.comment_level}" if self.comment_level is not None else "Do not add any"
             explain_level = f"Provide {self.explain_level}" if self.explain_level is not None else "Do not give any"
             default_documentation = (
-                f"{comment_level} code comments and {explain_level} explanation of the process."
+                f"{comment_level} comments and {explain_level} explanation of your response."
             )
 
             documentation = (
-                INSTRUCTIONS.get('role_contexts', {})
+                self.CONFIG.get('role_contexts', {})
                             .get(self.role_context, {})
                             .get('documentation', default_documentation)
             )
 
             instructions = (
-                f"{INSTRUCTIONS['role_contexts'][self.role_context]['instruct']}"
+                f"{self.CONFIG['role_contexts'][self.role_context]['instruct']}"
             )
             user_content = f"{instructions}; Request: {user_prompt}; {documentation}"
 
-            system_role = INSTRUCTIONS['role_contexts'][self.role_context]['system_role']
+            system_role = self.CONFIG['role_contexts'][self.role_context]['system_role']
         else:
             system_role = "You're a helpful assistant who answers my questions."
             user_content = user_prompt
