@@ -177,10 +177,21 @@ class CodeTutor:
             explain_level = f"Provide {self.explain_level}" if self.explain_level is not None else "Do not give any"
 
             default_documentation = (
-                f"{comment_level} comments and {explain_level} explanation of your response."
-            )  # MOVE TO YAML
-            default_role_instructions = "Write a haiku"  # MOVE TO YAML
-            default_system_role = "You're a helpful assistant."  # MOVE TO YAML
+                self.CONFIG.get('role_contexts', {})
+                .get('defaults', {})
+                .get('documentation', '')
+            )
+
+            default_role_instructions = (
+                self.CONFIG.get('role_contexts', {})
+                .get('defaults', {})
+                .get('instruct', '')
+            )
+            default_system_role = (
+                self.CONFIG.get('role_contexts', {})
+                .get('defaults', {})
+                .get('system_role', '')
+            )
 
             documentation = (
                 self.CONFIG.get('role_contexts', {})
