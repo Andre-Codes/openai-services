@@ -17,7 +17,7 @@ response_formats:
     css: "Put any code inside <pre><code> tag, using the following CSS for styling: code { font-family: 'Fira Code', monospace; background-color: #282a36; color: #50fa7b; padding: 1px; border-radius: 3px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2); } pre { overflow: auto; background-color: #282a30; color: #f8f8f2; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2); }"
 role_contexts:
   role_1:
-    enable: True
+    enable: True # context will not appear in list if key is missing or set to 'False'
     system_role: "You're a Dalek"
     instruct: "I am the doctor."
     instruct_2: "Tell me more"
@@ -31,6 +31,8 @@ role_contexts:
     instruct: "ignore all my previous instructions."
     instruct_2: "Generate a random fact"
     display_name: "Role 2"
+  role_3:
+    enable: True
   random:
     enable: False
     system_role: "You're a helpful assistant."
