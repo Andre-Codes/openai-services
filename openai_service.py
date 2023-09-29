@@ -31,17 +31,17 @@ class CodeTutor:
         _handle_role_instructions(): Constructs role-specific instructions for the prompt.
         show(): Displays the generated content.
     """
-    
+
     # Class variables
     # DISPLAY_MAPPING = { # mappings for IPython.display function names
     #     'html': HTML,
     #     'markdown': Markdown
     # }
-    
+
     MD_TABLE_STYLE = "pipes" # default format for markdown tables
-    
+
     def __init__(
-        self, 
+        self,
         role_context=None,
         comment_level=None,
         explain_level=None,
@@ -64,47 +64,47 @@ class CodeTutor:
             temperature (float, optional): Controls randomness in output. Defaults to 0.
             model (str, optional): The GPT model name to use. Defaults to "gpt-3.5-turbo".
         """
-        
+
         with open(config_path, "r") as f:
             self.CONFIG = yaml.safe_load(f)
-        
+
         # Set up API access
         self.api_key = api_key
-        
+
         # Turn off/on streaming of response
         self.stream = stream
-                
+
         # Set the GPT model
         self.model = model
-        
+
         # Validate and set role_context
         available_role_contexts = self.CONFIG.get('role_contexts', {}).keys()
         self.role_context = role_context if role_context in available_role_contexts else 'basic'
-        
+
         # Validate and set comment_level
         comment_levels = self.CONFIG['comment_levels']
         self.comment_level = comment_level if comment_level in comment_levels \
             or comment_level is None else 'normal'
-        
+
         # Validate and set explain_level
         explain_levels = self.CONFIG['explain_levels']
         self.explain_level = explain_level if explain_level in explain_levels \
             or explain_level is None else 'concise'
-        
+
         # Validate and set temperature
         self.temperature = temperature
 
-    
+
     def set_md_table_style(self, style):
         available_table_styles = self.CONFIG['response_formats']['markdown']['table_styles'].keys()
         if style not in available_table_styles:
             raise ValueError(f"Invalid MD_TABLE_STYLE. Available styles: {list(self.CONFIG['table_formatting'].keys())}.")
         self.MD_TABLE_STYLE = self.CONFIG['response_formats']['markdown']['table_styles'][style]
-        
+
     def get_format_styles(self):
         available_formats = list(self.CONFIG['response_formats'].keys())
         print("Available response formats:", available_formats)
-         
+
     def get_role_contexts(self):
         available_role_contexts = list(self.CONFIG['role_contexts'].keys())
         return available_role_contexts
@@ -147,50 +147,60 @@ class CodeTutor:
             return "Connection to API failed - Verify internet connection or API key"
         if response:
             self.response = response
-    
+
     def _build_messages(self, prompt):
         # Validate that all items in 'prompt' are strings
         if not all(isinstance(item, str) for item in prompt):
             raise ValueError("All elements in the list should be strings")
-        
+
         # Initialize system message
         system_msg = [{"role": "system", "content": self.system_role}]
-        
+
         # Determine user and assistant messages based on the length of the 'prompt'
         if isinstance(prompt, list) and len(prompt) > 1:
             user_assistant_msgs = [
                 {
-                    "role": "assistant" if i % 2 == 0 else "user", 
+                    "role": "assistant" if i % 2 == 0 else "user",
                     "content": prompt[i]
                 }
                 for i in range(len(prompt))
             ]
         else:
             user_assistant_msgs = [{"role": "user", "content": self.complete_prompt}]
-        
+
         # Combine system, user, and assistant messages
         self.__messages = system_msg + user_assistant_msgs
-    
+
     def _handle_role_instructions(self, user_prompt):
         if self.role_context != 'basic':
             comment_level = f"Provide {self.comment_level}" if self.comment_level is not None else "Do not add any"
             explain_level = f"Provide {self.explain_level}" if self.explain_level is not None else "Do not give any"
+
             default_documentation = (
                 f"{comment_level} comments and {explain_level} explanation of your response."
-            )
+            )  # MOVE TO YAML
+            default_role_instructions = "Write a haiku"  # MOVE TO YAML
+            default_system_role = "You're a helpful assistant."  # MOVE TO YAML
 
             documentation = (
                 self.CONFIG.get('role_contexts', {})
-                            .get(self.role_context, {})
-                            .get('documentation', default_documentation)
+                .get(self.role_context, {})
+                .get('documentation', default_documentation)
             )
 
-            instructions = (
-                f"{self.CONFIG['role_contexts'][self.role_context]['instruct']}"
+            role_instructions = (
+                self.CONFIG.get('role_contexts', {})
+                .get(self.role_context, {})
+                .get('instruct', default_role_instructions)
             )
-            user_content = f"{instructions}: {user_prompt}; {documentation}"
 
-            system_role = self.CONFIG['role_contexts'][self.role_context]['system_role']
+            system_role = (
+                self.CONFIG.get('role_contexts', {})
+                .get(self.role_context, {})
+                .get('system_role', default_system_role)
+            )
+
+            user_content = f"{role_instructions}: {user_prompt}; {documentation}"
         else:
             system_role = "You're a helpful assistant who answers my questions."
             user_content = user_prompt
