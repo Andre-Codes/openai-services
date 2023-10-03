@@ -2,7 +2,7 @@ import openai
 import yaml
 
 
-class CodeTutor:
+class ChatEngine:
     """
     A class for interacting with GPT models via the OpenAI API.
     
