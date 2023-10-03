@@ -42,5 +42,3 @@ role_contexts:
     system_role: "You're a helpful assistant."
     instruct: ""
     documentation: "Be very concise, only responding directly to the question."
-explain_levels: ["concise", "comprehensive", "advanced", "dumbed-down", "technical", "pedagogical", "professional", "child-level"]
-comment_levels: ["normal", "concise", "detailed", "verbose", "exhaustive", "pedagogical"]
