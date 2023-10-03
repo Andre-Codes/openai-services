@@ -62,9 +62,9 @@ class ChatEngine:
             temperature (float, optional): Controls randomness in output. Defaults to 0.
             model (str, optional): The GPT model name to use. Defaults to "gpt-3.5-turbo".
         """
-
-        with open(config_path, "r") as f:
-            self.CONFIG = yaml.safe_load(f)
+        if config_path:
+            with open(config_path, "r") as f:
+                self.CONFIG = yaml.safe_load(f)
 
         # Set up API access
         self.api_key = api_key
