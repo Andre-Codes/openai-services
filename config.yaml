@@ -2,7 +2,7 @@
 app_ui:
   page_title: "My Webpage"
   title: "App Title"
-  title_emoji: "question"
+  title_emoji: "question"  # use shortcodes (see: https://streamlit-emoji-shortcodes-streamlit-app-gwckff.streamlit.app/)
   subheader: "What can I do for you?"
 allow_null_prompt: True
 response_formats:
