@@ -1,5 +1,5 @@
 import streamlit as st
-import openai_service as gpt
+from .openai_service import CodeTutor
 
 
 def generate_response(app, prompt):

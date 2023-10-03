@@ -1,7 +1,7 @@
 import streamlit as st
 import os
-from web_helpers import display_response, generate_response
-import openai_service as gpt
+from .web_helpers import display_response, generate_response
+from .openai_service import CodeTutor as gpt
 
 
 # Load instructions from JSON file
