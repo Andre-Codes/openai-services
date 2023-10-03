@@ -1,7 +1,7 @@
 import streamlit as st
 import os
-from .web_helpers import display_response, generate_response
-from .openai_service import CodeTutor as gpt
+import web_helpers as web
+import gpt_utils as gpt
 
 
 # Load instructions from JSON file
@@ -13,7 +13,7 @@ config_path = path_web if os.path.exists(path_web) else path_local
 api_key = os.environ['OPENAI_API_KEY']
 
 # initialize the GPT class
-app = gpt.CodeTutor(config_path=config_path, api_key=api_key, stream=True)
+app = gpt.ChatEngine(config_path=config_path, api_key=api_key, stream=True)
 
 # get main app title information
 app_title = (
@@ -71,7 +71,7 @@ with adv_settings:
 #### Sidebar with dropdown of friendly role names ###
 
 # Get all list roles
-json_roles = gpt.CodeTutor.get_role_contexts(app)
+json_roles = gpt.ChatEngine.get_role_contexts(app)
 
 # Create dictionary of enabled roles and display names
 # default to role key if no display_name value set
@@ -148,9 +148,9 @@ if answer_button:
             else:
                 st.info('Please provide a prompt...', icon='😑')
 
-        response = generate_response(app, user_prompt)
+        response = web.generate_response(app, user_prompt)
 
-        displayed_response = display_response(
+        displayed_response = web.display_response(
             response,
             assistant=allow_download,
             all_response_content=all_response_content,
@@ -160,8 +160,8 @@ if answer_button:
 
         if extra_lesson_toggle:
             prompt_messages = extra_lesson(user_prompt, app.role_context, displayed_response)
-            extra_response = generate_response(app, prompt_messages)
-            display_response(
+            extra_response = web.generate_response(app, prompt_messages)
+            web.display_response(
                 extra_response,
                 assistant=True,
                 all_response_content=all_response_content,
