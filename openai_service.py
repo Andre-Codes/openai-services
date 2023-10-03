@@ -43,8 +43,6 @@ class CodeTutor:
     def __init__(
         self,
         role_context=None,
-        comment_level=None,
-        explain_level=None,
         temperature=None,
         model="gpt-3.5-turbo",
         stream=False,
@@ -80,16 +78,6 @@ class CodeTutor:
         # Validate and set role_context
         available_role_contexts = self.CONFIG.get('role_contexts', {}).keys()
         self.role_context = role_context if role_context in available_role_contexts else 'basic'
-
-        # Validate and set comment_level
-        comment_levels = self.CONFIG['comment_levels']
-        self.comment_level = comment_level if comment_level in comment_levels \
-            or comment_level is None else 'normal'
-
-        # Validate and set explain_level
-        explain_levels = self.CONFIG['explain_levels']
-        self.explain_level = explain_level if explain_level in explain_levels \
-            or explain_level is None else 'concise'
 
         # Validate and set temperature
         self.temperature = temperature
@@ -173,8 +161,6 @@ class CodeTutor:
 
     def _handle_role_instructions(self, user_prompt):
         if self.role_context != 'basic':
-            comment_level = f"Provide {self.comment_level}" if self.comment_level is not None else "Do not add any"
-            explain_level = f"Provide {self.explain_level}" if self.explain_level is not None else "Do not give any"
 
             default_documentation = (
                 self.CONFIG.get('role_contexts', {})
