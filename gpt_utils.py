@@ -127,14 +127,12 @@ class ChatEngine:
         available_role_contexts = list(self.CONFIG['role_contexts'].keys())
         return available_role_contexts
 
-    def _validate_and_assign_params(self, prompt, format_style):
+    def _validate_and_assign_params(self, prompt):
         if prompt is None:
             raise ValueError("Prompt can't be None.")
         self.prompt = prompt
-        if format_style:
-            self.format_style = format_style.lower()
 
-    def _handle_format_instructions(self):
+    def _handle_format_instructions(self, format_style):
         """
         Construct the final prompt by combining the role/context specific instructions
         (built from `_handle_role_instructions`) with formatting instructions.
@@ -151,32 +149,39 @@ class ChatEngine:
 
         if self.role_context != 'general':
             response_formats = self.CONFIG.get('response_formats', {})
-            format_style = response_formats.get(self.format_style, {})
-            response_instruct = format_style.get('instruct', '')
+            style_name = response_formats.get(format_style, {})
+            response_instruct = style_name.get('instruct', '')
 
-            if self.format_style == 'markdown':
-                md_table_style = format_style.get('table_styles', {}).get(self.MD_TABLE_STYLE, '')
+            if style_name.lower() == 'markdown':
+                md_table_style = style_name.get('table_styles', {}).get(self.MD_TABLE_STYLE, '')
                 response_instruct += md_table_style
-            elif self.format_style == 'html':
-                use_css = format_style.get('use_css', False)
+            elif style_name.lower() == 'html':
+                use_css = style_name.get('use_css', False)
                 if use_css:
-                    css = format_style.get('css', '')
+                    css = style_name.get('css', '')
                     response_instruct += css
             # construct and save the final prompt to be sent with API call
             self.complete_prompt = f"{response_instruct}{adjusted_prompt}"
+
+        # If format_style is specified but no role_context found in CONFIG
+        elif format_style:
+            response_instruct = f"Respond in the following {format_style} format \n\n "
+            self.complete_prompt = f"{response_instruct}{adjusted_prompt}"
+        # Finally, if no format style specified save only the adjusted prompt
         else:
-            # if no role contexts are available or none are selected
-            # the complete prompt defaults to only what is passed
-            # to the get_response method
             self.complete_prompt = adjusted_prompt
 
     def _text_api_call(self, text_prompt, **kwargs):
-
-        self._handle_format_instructions()
-        self._build_messages(prompt=text_prompt, **kwargs)
-
         if 'streaming' in kwargs:
             self.stream = kwargs['streaming']
+        if 'format_style' in kwargs:
+            format_style = kwargs['format_style']
+        else:
+            format_style = None
+
+        self._handle_format_instructions(format_style)
+        self._build_messages(prompt=text_prompt, **kwargs)
+        print(self.__messages)
         try:
             client = OpenAI()
             response = client.chat.completions.create(
@@ -320,31 +325,36 @@ class ChatEngine:
             str: The inputted prompt with role/context instructions..
         """
 
-        default_documentation = self.CONFIG.get('role_contexts', {}).get('defaults', {}).get('documentation', '')
+        default_documentation = self.CONFIG.get('role_contexts', {}) \
+            .get('defaults', {}).get('documentation', '')
 
-        default_role_instructions = self.CONFIG.get('role_contexts', {}).get('defaults', {}).get('instruct', '')
+        default_role_instructions = self.CONFIG.get('role_contexts', {}) \
+            .get('defaults', {}).get('instruct', '')
 
-        default_system_role = self.CONFIG.get('role_contexts', {}).get('defaults', {}).get('system_role', self.system_role)
+        default_system_role = self.CONFIG.get('role_contexts', {}) \
+            .get('defaults', {}).get('system_role', self.system_role)
 
-        documentation = self.CONFIG.get('role_contexts', {}).get(self.role_context, {}).get('documentation', default_documentation)
+        documentation = self.CONFIG.get('role_contexts', {}) \
+            .get(self.role_context, {}).get('documentation', default_documentation)
 
-        role_instructions = self.CONFIG.get('role_contexts', {}).get(self.role_context, {}).get('instruct', default_role_instructions)
+        role_instructions = self.CONFIG.get('role_contexts', {}) \
+            .get(self.role_context, {}).get('instruct', default_role_instructions)
 
-        system_role = self.CONFIG.get('role_contexts', {}).get(self.role_context, {}).get('system_role', default_system_role)
+        system_role = self.CONFIG.get('role_contexts', {}) \
+            .get(self.role_context, {}).get('system_role', default_system_role)
 
         # set the system_role class variable
         self.system_role = system_role
         # construct the prompt by prefixing any role instructions
         # and appending any documentation to the end
         prompt_with_context = f"{role_instructions}{user_prompt}{documentation}"
-        #raise AssertionError("prompt with context:" + str(prompt_with_context))
+        # raise AssertionError("prompt with context:" + str(prompt_with_context))
         self.prompt = prompt_with_context
 
         return prompt_with_context
 
     def get_response(self, response_type: str = 'text',
                      prompt: str | list = None,
-                     format_style: str = 'markdown',
                      raw_output: bool = True, **kwargs) -> Union[str, dict, tuple, Iterator]:
         """
         Retrieve a response from the OpenAI API in the
@@ -385,7 +395,7 @@ class ChatEngine:
         """
 
         # validate and set the instance variable for prompt
-        self._validate_and_assign_params(prompt, format_style)
+        self._validate_and_assign_params(prompt)
         openai.api_key = self.api_key
 
         if response_type == 'text':
