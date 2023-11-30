@@ -6,37 +6,21 @@ from typing import Union, Iterator
 
 class ChatEngine:
     """
-    A class for interacting with GPT models via the OpenAI API.
-    
+    A class for interacting with GPT models via the OpenAI API. It supports text, image,
+    and vision responses with flexible configurations and formatting options.
+
     Attributes:
         api_key (str): The OpenAI API key, sourced from environment variables.
         model (str): The GPT model name to be used. Defaults to "gpt-3.5-turbo".
         role_context (str): Operational context for the GPT model, e.g., 'general', 'api_explain'.
         temperature (float): Controls randomness in output. Lower is more deterministic.
-        
+
     Class Variables:
         DISPLAY_MAPPING (dict): Mappings for IPython display function names.
         MD_TABLE_STYLE (str): Default style for Markdown tables.
-        
-    Methods:
-        __init__(): Initializes class attributes.
-        set_md_table_style(): Sets Markdown table style.
-        get_format_styles(): Prints available response formats.
-        get_role_contexts(): Prints available role contexts.
-        _validate_and_assign_params(): Validates and assigns prompt and format_style.
-        _handle_format_instructions(): Constructs the complete prompt for OpenAI API call.
-        _text_api_call(): Makes the API call and stores the response.
-        _handle_output(): Handles saving and displaying the response.
-        get_response(): Main function to get a response from the GPT model.
-        _handle_role_instructions(): Constructs role-specific instructions for the prompt.
-        show(): Displays the generated content.
+        MODEL_OPTIONS (dict): Options for different models, particularly for image generation.
+        VALID_RESPONSE_TYPES (set): Set of valid response types for determining the API call
     """
-
-    # Class variables
-    # DISPLAY_MAPPING = { # mappings for IPython.display function names
-    #     'html': HTML,
-    #     'markdown': Markdown
-    # }
 
     MD_TABLE_STYLE = "pipes"  # default format for markdown tables
 
@@ -45,41 +29,44 @@ class ChatEngine:
             'dall-e-3': {
                 'qualities': ['standard', 'hd'],
                 'sizes': ['1024x1024', '1024x1792', '1792x1024'],
+                'styles': ['vivid', 'natural'],
                 'max_count': 1
             },
             'dall-e-2': {
                 'qualities': ['standard'],
-                'sizes': ['1024x1024'],
+                'sizes': ['1024x1024', '512x512', '256x256'],
+                'styles': [None],
                 'max_count': 10
             }
         }
     }
 
-    def __init__(
-            self,
-            role_context=None,
-            system_role=None,
-            temperature=1,
-            model="gpt-3.5-turbo",
-            stream=False,
-            api_key=None,  # os.environ['OPENAI_API_KEY']
-            config_path=None):
+    # alias mappings for image sizes
+    SIZE_ALIASES = {
+        'iphone': '1024x1792',
+        'portrait': '1024x1792',
+        'banner': '1792x1024',
+        'landscape': '1792x1024',
+        'square': '1024x1024'
+    }
+
+    VALID_RESPONSE_TYPES = {'text', 'image', 'vision'}
+
+    def __init__(self, role_context=None, system_role=None, temperature=1,
+                 model="gpt-3.5-turbo", stream=False, api_key=None, config_path=None):
         """
-        Initializes the GPTService class with settings to control the prompt and response.
+        Initializes the ChatEngine instance with various configuration settings.
 
-        # Parameters
-        ----------
-            role_context (str, optional): Operational context for GPT. This directly controls
-            what information is sent to the GPT model in addition to the user's prompt.
-            Use the `get_role_contexts()` method to view the available roles. Defaults to 'general'.
+        Parameters:
+            role_context (str, optional): Specifies the operational context for the GPT model.
+            system_role (str, optional): Describes the system's role in interactions.
+            temperature (float, optional): Controls the randomness of the model's output.
+            model (str, optional): Specifies the GPT model to use.
+            stream (bool, optional): If True, enables streaming of responses.
+            api_key (str, optional): The API key for OpenAI.
+            config_path (str, optional): Path to a YAML configuration file.
 
-            comment_level (str, optional): Level of comment verbosity. Defaults to 'normal'.
-
-            explain_level (str, optional): Level of explanation verbosity. Defaults to 'concise'.
-
-            temperature (float, optional): Controls randomness in output. Defaults to 0.
-
-            model (str, optional): The GPT model name to use. Defaults to "gpt-3.5-turbo".
+        If a configuration file is provided, it sets up additional formatting and role contexts.
         """
 
         if config_path:
@@ -134,14 +121,21 @@ class ChatEngine:
 
     def _handle_format_instructions(self, format_style):
         """
-        Construct the final prompt by combining the role/context specific instructions
-        (built from `_handle_role_instructions`) with formatting instructions.
+        Constructs the final prompt by combining role/context-specific instructions with
+        formatting instructions based on the provided format style.
 
-        This method first acquires role/context-specific instructions from the `_handle_role_instructions` method.
+        This method leverages the `_handle_role_instructions` method to append any necessary
+        instructions or context to the user's prompt, based on the current role_context setting.
+        It then applies additional formatting instructions as specified by the `format_style`.
+
+        Parameters:
+            format_style (str): The desired format style for the response, such as 'markdown' or 'html'.
+                                This influences how the final prompt is constructed.
 
         Returns:
-            str: The fully constructed prompt, ready to for the API call.
+            str: The fully constructed prompt, ready for the OpenAI API call.
 
+        This method updates `self.complete_prompt` with the final formatted prompt.
         """
 
         # get the adjusted prompt reconstructed with any custom instructions
@@ -172,16 +166,37 @@ class ChatEngine:
             self.complete_prompt = adjusted_prompt
 
     def _text_api_call(self, text_prompt, **kwargs):
-        if 'streaming' in kwargs:
-            self.stream = kwargs['streaming']
-        if 'format_style' in kwargs:
-            format_style = kwargs['format_style']
-        else:
-            format_style = None
+        """
+        Makes an API call for text-based responses using the specified prompt and additional parameters.
+
+        This method constructs the message for the OpenAI API call by handling the provided text prompt
+        and applying any additional formatting or configuration specified in kwargs. It then makes the
+        API call using the OpenAI client and stores the response.
+
+        Parameters:
+            text_prompt (str | list): The input text or list of texts to serve as a basis for the OpenAI API response.
+
+        Keyword Arguments:
+            streaming (bool, optional): If set to True, the response is streamed. Default is False.
+            format_style (str, optional): The format style to be applied to the response (e.g., 'markdown').
+
+            Other keyword arguments may be passed and will be handled according to the OpenAI API requirements.
+
+        Raises:
+            openai.APIConnectionError: If there is an issue with the network connection.
+            openai.RateLimitError: If the rate limit for the API is reached.
+            openai.APIError: For other API-related errors.
+
+        This method updates `self.response` with the response from the OpenAI API call.
+        """
+
+        # Check for streaming and format_style in kwargs
+        self.stream = kwargs.get('streaming', self.stream)
+        format_style = kwargs.get('format_style', None)
 
         self._handle_format_instructions(format_style)
         self._build_messages(prompt=text_prompt, **kwargs)
-        print(self.__messages)
+
         try:
             client = OpenAI()
             response = client.chat.completions.create(
@@ -201,16 +216,33 @@ class ChatEngine:
             raise e
 
     def _vision_api_call(self, image_prompt, **kwargs):
-        if 'text_prompt' in kwargs:
-            text_prompt = kwargs['text_prompt']
-        else:
-            text_prompt = "Describe this image."
+        """
+        Makes an API call for vision-based responses using the specified image prompt and additional parameters.
 
-        self._build_messages(
-            prompt=text_prompt,
-            response_type='vision',
-            image_prompts=image_prompt
-        )
+        This method is designed to interact with the OpenAI API for vision-related tasks. It constructs
+        the appropriate message structure for the vision API, taking into account the provided image URLs
+        and any additional text prompt. It then makes the API call using the OpenAI client and stores the response.
+
+        Parameters:
+            image_prompt (str | list): A URL or a list of URLs pointing to the images to be processed.
+
+        Keyword Arguments:
+            text_prompt (str, optional): An additional text prompt to accompany the image in the API call.
+            Other keyword arguments may be passed and will be handled according to the OpenAI API requirements.
+
+        Raises:
+            openai.APIConnectionError: If there is an issue with the network connection.
+            openai.RateLimitError: If the rate limit for the API is reached.
+            openai.APIError: For other API-related errors.
+
+        This method updates `self.response` with the response from the OpenAI API call.
+        """
+
+        # Default text prompt if not provided
+        text_prompt = kwargs.get('text_prompt', "Describe this image.")
+
+        # Build messages for vision API
+        self._build_messages(prompt=text_prompt, response_type='vision', image_prompts=image_prompt)
 
         try:
             client = OpenAI()
@@ -228,30 +260,87 @@ class ChatEngine:
         except openai.APIError as e:
             raise e
 
+    def _validate_model_option(self, option_value, valid_options, option_name, model=None):
+        """
+        Validates the given option value against a list of valid options. Ignores the option
+        if the model does not support it.
+
+        Parameters:
+            option_value (str): The value to validate.
+            valid_options (list): A list of valid options.
+            option_name (str): The name of the option for logging purposes.
+            model (str, optional): The model for which the option is being validated.
+
+        Returns:
+            str: A valid option value or None if the option is not supported.
+        """
+        if valid_options == [None]:
+            print(f"The parameter '{option_name}' is not supported by the model '{model}'. Ignoring it.")
+            return 'vivid'  # something still needs to be passed to the api
+        elif valid_options and option_value not in valid_options:
+            default = valid_options[0]
+            print(f"Provided {option_name} is invalid for model '{model}'. Defaulting to {default}.")
+            return default
+        return option_value
+
     def _image_api_call(self, text_prompt, **kwargs):
+        """
+        Makes an API call for image generation based on the specified text prompt and additional parameters.
+
+        This method interfaces with the OpenAI API for image-related tasks, particularly generating images
+        from text prompts. It configures the request parameters based on the method arguments and additional
+        keyword arguments, then makes the API call using the OpenAI client to generate images.
+
+        Parameters:
+            text_prompt (str): The text prompt based on which images will be generated.
+
+        Keyword Arguments:
+            image_model (str, optional): Specifies the image generation model to use (e.g., 'dall-e-3').
+            image_count (int, optional): The number of images to generate. For **dall-e-3**, only 1 image is supported
+            image_size (str, optional): The size of the generated images.
+            image_quality (str, optional): The quality of the generated images.
+            image_style: 'Vivid' causes the model to lean towards generating hyperreal and dramatic images.
+                'Natural' causes the model to produce more natural, less hyperreal looking images.
+                This param is only supported for **dall-e-3**
+            revised_prompt (bool, optional): If True, uses the generated revised prompt for image generation.
+            Other keyword arguments may be passed and will be handled according to the OpenAI API requirements.
+
+        Raises:
+            openai.APIConnectionError: If there is an issue with the network connection.
+            openai.RateLimitError: If the rate limit for the API is reached.
+            openai.APIError: For other API-related errors.
+
+        This method updates `self.response` with the response from the OpenAI API call.
+        """
+
         # get the adjusted prompt reconstructed with any custom instructions
         text_prompt = self._handle_role_instructions(text_prompt)
 
-        # Extracting parameters with defaults
+        # Extract parameters with defaults
         model = kwargs.get('image_model', 'dall-e-3')
         count = kwargs.get('image_count', 1)
-        size = kwargs.get('image_size', "1024x1024")
-        quality = kwargs.get('image_q', "standard")
+        size = kwargs.get('image_size', "1024x1024").lower()
+        quality = kwargs.get('image_quality', "standard").lower()
+        style = kwargs.get('image_style', 'vivid').lower()
         revised_prompt = kwargs.get('revised_prompt', False)
+
+        # Translate size aliases
+        size = self.SIZE_ALIASES.get(size.lower(), size)
 
         # Adjusting model for count
         if count > 1 and model != 'dall-e-2':
             model = 'dall-e-2'
 
-        # Validate and adjust size and quality
-        model_opts = ChatEngine.MODEL_OPTIONS['image'][model]
-        if size not in model_opts['sizes']:
-            size = model_opts['sizes'][0]  # Default to first available size
-        if quality not in model_opts['qualities']:
-            quality = model_opts['qualities'][0]  # Default to first available quality
+        # Fetch model options
+        model_opts = self.MODEL_OPTIONS['image'].get(model, {})
+
+        # Validate and adjust size, quality, and style
+        size = self._validate_model_option(size, model_opts.get('sizes', []), "image_size", model)
+        quality = self._validate_model_option(quality, model_opts.get('qualities', []), "quality", model)
+        style = self._validate_model_option(style, model_opts.get('styles', []), "image_style", model)
 
         # Validate and adjust count
-        if count > model_opts['max_count']:
+        if count > model_opts.get('max_count', 1):
             count = model_opts['max_count']
 
         if not revised_prompt and model != 'dall-e-2':
@@ -269,9 +358,10 @@ class ChatEngine:
                 prompt=preface + text_prompt,
                 n=count,
                 size=size,
-                quality=quality
+                quality=quality,
+                style=style
             )
-            print(f"model: {model}, preface: '{preface}', count: {count}, size: {size}, quality: {quality}")
+            print(f"model: {model}, count: {count}, size: {size}, quality: {quality}, style: {style}, preface: '{preface}'")
             self.response = response
         except openai.APIConnectionError as e:
             raise e
@@ -281,6 +371,27 @@ class ChatEngine:
             raise e
 
     def _build_messages(self, prompt, response_type='text', **kwargs):
+        """
+        Constructs the message list for API calls based on the given prompt, response type,
+        and additional keyword arguments.
+
+        This method prepares the message structure required by the OpenAI API, which varies
+        depending on the response type (e.g., 'text', 'vision'). It ensures that the messages
+        are formatted correctly, including handling image prompts for 'vision' response types.
+
+        Parameters:
+            prompt (str | list): The main text prompt or a list of prompts for the API call.
+            response_type (str, optional): The type of response required ('text', 'vision').
+                                           Defaults to 'text'.
+
+        Keyword Arguments:
+            image_prompts (list, optional): Used when response_type is 'vision'. A list of image URL(s).
+            system_role (str, optional): The role of the system in the conversation, influencing the message structure.
+            Other keyword arguments may be relevant for specific response types and are handled accordingly.
+
+        This method updates `self.__messages` with the appropriately structured messages for the API call.
+        """
+
         if response_type == 'vision':
             # Handle vision API message format
             image_prompts = kwargs.get('image_prompts', [])
@@ -355,48 +466,45 @@ class ChatEngine:
 
     def get_response(self, response_type: str = 'text',
                      prompt: str | list = None,
-                     raw_output: bool = True, **kwargs) -> Union[str, dict, tuple, Iterator]:
+                     raw_output: bool = True, **kwargs) -> Union[str, dict, tuple, list, Iterator]:
         """
-        Retrieve a response from the OpenAI API in the
-         desired format based on the provided parameters.
+        Retrieves a response from the OpenAI API based on the specified parameters. This is the main
+        method to interact with different OpenAI API functionalities like text, image, and vision responses.
+
+        It routes the request to the appropriate internal method based on the response type and handles
+        the construction of prompts, messages, and API call parameters.
 
         Parameters:
+            response_type (str): The type of response to generate; options include 'text', 'image', or 'vision'.
+                                 Determines the OpenAI API endpoint to use. Defaults to 'text'.
+            prompt (str | list): The input prompt or a list of prompts for the OpenAI API.
+            raw_output (bool): Determines whether to return the raw API response or a processed result.
+                               Defaults to True for raw JSON output.
 
-        - response_type (str): The type of response to generate; either 'text' or 'image'.
-                               This determines whether to use the `ChatCompletion`
-                               or the `Image` API.
-                               Default is 'text'.
-        - prompt (str): The input text to serve as a basis for the OpenAI API response.
-        - format_style (str): The format to use for the response, such as 'markdown'.
-                              Default is 'markdown'. This will be ignored if the 'Image'
-                              API is chosen since `_handle_format_instructions` will not be called.
-        - raw_output (bool): Whether to return the raw JSON response or the extracted content
-                             found within: `self.response['choices'][0]['message']['content']`
-                             Default is True for raw JSON output.
-        - **kwargs: Additional keyword arguments for more advanced configurations.
-                    e.g. `_build_messages` can accept `system_role`
+        Keyword Arguments:
+            Keyword arguments specific to each response type are forwarded to the respective internal methods.
+            For 'text' and 'vision': these may include 'streaming', 'format_style', 'text_prompt', etc.
+            For 'image': these may include 'image_model', 'image_count', 'image_size', 'image_quality', etc.
 
         Returns:
-
-        - If raw_output is False and response_type is not 'image', returns the 'content' field
-          from the 'choices' list in the API response.
-        - Otherwise, returns the raw JSON response.
-            In the case of the 'image' api an image URL is returned.
+            Depending on the response type and 'raw_output' flag:
+            - A string, dictionary, tuple, list, or an iterator containing the response data.
 
         Raises:
-        - May raise exceptions based on internal validation methods and API calls.
+            The method may raise various exceptions based on internal validation and API call outcomes.
 
         Usage Example:
-
-            get_response(response_type='text',
-            system_role="You're a comedian",
-            prompt='Tell me a joke.',
-            raw_output=False)
+            get_response(response_type='text', prompt='Tell me a joke.', raw_output=False)
         """
 
         # validate and set the instance variable for prompt
         self._validate_and_assign_params(prompt)
         openai.api_key = self.api_key
+
+        # Validate the response type
+        if response_type not in ChatEngine.VALID_RESPONSE_TYPES:
+            raise ValueError(
+                f"Invalid response type: '{response_type}'. Valid options are: {ChatEngine.VALID_RESPONSE_TYPES}")
 
         if response_type == 'text':
             self._text_api_call(text_prompt=prompt, **kwargs)
@@ -415,8 +523,12 @@ class ChatEngine:
                 # will be list of 'Nones' for older models
                 revised_prompts = [image.revised_prompt for image in self.response.data]
                 # If revised_prompt param is used return the urls and revisions
-                # revised_prompt = kwargs.get('revised_prompt', False)
-                return image_urls, revised_prompts
+                revised_prompt = kwargs.get('revised_prompt', False)
+                if revised_prompt:
+                    return image_urls, revised_prompts
+                else:
+                    print(f"revised prompt: {revised_prompts}")
+                    return image_urls
             elif response_type == 'vision':
                 return self.response.choices[0].message.content
 
