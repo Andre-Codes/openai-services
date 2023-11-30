@@ -1,7 +1,7 @@
 import openai
 from openai import OpenAI
 import yaml
-from typing import Union
+from typing import Union, Iterator
 
 
 class ChatEngine:
@@ -24,7 +24,7 @@ class ChatEngine:
         get_format_styles(): Prints available response formats.
         get_role_contexts(): Prints available role contexts.
         _validate_and_assign_params(): Validates and assigns prompt and format_style.
-        _build_prompt(): Constructs the complete prompt for OpenAI API call.
+        _handle_format_instructions(): Constructs the complete prompt for OpenAI API call.
         _text_api_call(): Makes the API call and stores the response.
         _handle_output(): Handles saving and displaying the response.
         get_response(): Main function to get a response from the GPT model.
@@ -134,7 +134,7 @@ class ChatEngine:
         if format_style:
             self.format_style = format_style.lower()
 
-    def _build_prompt(self):
+    def _handle_format_instructions(self):
         """
         Construct the final prompt by combining the role/context specific instructions
         (built from `_handle_role_instructions`) with formatting instructions.
@@ -146,8 +146,8 @@ class ChatEngine:
 
         """
 
-        # get the adjusted prompt reconstructed with role instructions
-        prompt = self._handle_role_instructions(self.prompt)
+        # get the adjusted prompt reconstructed with any custom instructions
+        adjusted_prompt = self._handle_role_instructions(self.prompt)
 
         if self.role_context != 'general':
             response_formats = self.CONFIG.get('response_formats', {})
@@ -163,14 +163,18 @@ class ChatEngine:
                     css = format_style.get('css', '')
                     response_instruct += css
             # construct and save the final prompt to be sent with API call
-            self.complete_prompt = f"{response_instruct}{prompt}"
+            self.complete_prompt = f"{response_instruct}{adjusted_prompt}"
         else:
             # if no role contexts are available or none are selected
             # the complete prompt defaults to only what is passed
             # to the get_response method
-            self.complete_prompt = prompt
+            self.complete_prompt = adjusted_prompt
 
-    def _text_api_call(self, **kwargs):
+    def _text_api_call(self, text_prompt, **kwargs):
+
+        self._handle_format_instructions()
+        self._build_messages(prompt=text_prompt, **kwargs)
+
         if 'streaming' in kwargs:
             self.stream = kwargs['streaming']
         try:
@@ -220,6 +224,9 @@ class ChatEngine:
             raise e
 
     def _image_api_call(self, text_prompt, **kwargs):
+        # get the adjusted prompt reconstructed with any custom instructions
+        text_prompt = self._handle_role_instructions(text_prompt)
+
         # Extracting parameters with defaults
         model = kwargs.get('image_model', 'dall-e-3')
         count = kwargs.get('image_count', 1)
@@ -297,7 +304,7 @@ class ChatEngine:
                     for i in range(len(prompt))
                 ]
             else:
-                user_assistant_msgs = [{"role": "user", "content": prompt}]
+                user_assistant_msgs = [{"role": "user", "content": self.complete_prompt}]
 
             # Combine system, user, and assistant messages
             self.__messages = system_msg + user_assistant_msgs
@@ -338,7 +345,7 @@ class ChatEngine:
     def get_response(self, response_type: str = 'text',
                      prompt: str | list = None,
                      format_style: str = 'markdown',
-                     raw_output: bool = True, **kwargs) -> Union[str, dict, tuple]:
+                     raw_output: bool = True, **kwargs) -> Union[str, dict, tuple, Iterator]:
         """
         Retrieve a response from the OpenAI API in the
          desired format based on the provided parameters.
@@ -352,7 +359,7 @@ class ChatEngine:
         - prompt (str): The input text to serve as a basis for the OpenAI API response.
         - format_style (str): The format to use for the response, such as 'markdown'.
                               Default is 'markdown'. This will be ignored if the 'Image'
-                              API is chosen since `_build_prompt` will not be called.
+                              API is chosen since `_handle_format_instructions` will not be called.
         - raw_output (bool): Whether to return the raw JSON response or the extracted content
                              found within: `self.response['choices'][0]['message']['content']`
                              Default is True for raw JSON output.
@@ -382,11 +389,8 @@ class ChatEngine:
         openai.api_key = self.api_key
 
         if response_type == 'text':
-            self._build_prompt()
-            self._build_messages(prompt, **kwargs)
-            self._text_api_call(**kwargs)
+            self._text_api_call(text_prompt=prompt, **kwargs)
         elif response_type == 'image':
-            prompt = self._handle_role_instructions(prompt)
             self._image_api_call(text_prompt=prompt, **kwargs)
         elif response_type == 'vision':
             self._vision_api_call(image_prompt=prompt, **kwargs)
