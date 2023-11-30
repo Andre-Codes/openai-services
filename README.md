@@ -34,6 +34,12 @@ Create an instance of `ChatEngine`:
 chat_engine = ChatEngine(api_key='your_openai_api_key')
 ```
 
+Alternatively, you can create an instance with a configuration file:
+
+```python
+chat_engine = ChatEngine(api_key='your_openai_api_key', config_path='path_to_config.yaml')
+```
+
 ### Generating Responses
 To generate a text response:
 
@@ -93,3 +99,42 @@ response = chat_engine.get_response(
 )
 print(response)
 ```
+
+## Using a Configuration File
+
+The ChatEngine class allows the use of a configuration file to define various prompts, roles, and formats for interacting with the OpenAI API. This not only enhances flexibility and usability but also enables sophisticated prompt engineering, allowing for customized and context-specific interactions based on predefined settings.
+
+### Configuration File Structure
+The configuration file, typically in YAML format, can contain settings for different operational contexts, response formats, and specialized instructions. Here's an example structure:
+
+```yaml
+role_contexts:
+  general:
+    instruct: "You are a general-purpose assistant."
+  api_explain:
+    system_role: "You're an expert teacher of code library/API documentation. You will be provided with either the library name or the library documentation itself."
+        instruct: "For the API/library provide the description, signature (for classes and methods), parameters, attributes, 'returns', and code examples."
+        # 'documentation' is anything you want appended to the very end of the prompt
+        # typically used for controlling how detailed the generated response is and how it's concluded
+        documentation: "Be very detailed with your response. Conclude with, if applicable, real-world scenarios where this will be useful and how one could implement it."
+
+response_formats:
+  markdown:
+    instruct: "Respond using markdown style formatting. Use the # character for headers ..."
+  html:
+    use_css: True
+    css: "Put any code inside <pre><code> tag using the following CSS for styling: code  font-family: 'Fira Code' ..."
+
+custom_prompts:
+  joke:
+    prompt: "Tell me a joke."
+  weather:
+    prompt: "What's the weather like today?"
+```
+
+### Using the Config File with ChatEngine
+- **Initialization with Config Path**: Instantiate `ChatEngine` with the path to your config file.
+- **Defining Roles and Formats**: The class uses `role_contexts` and `response_formats` from the config for structuring prompts and formatting responses.
+
+This setup allows for dynamic interactions with the GPT model, suitable for a variety of applications.
+
