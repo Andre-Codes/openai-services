@@ -34,13 +34,23 @@ class ChatEngine:
                 'qualities': ['standard', 'hd'],
                 'sizes': ['1024x1024', '1024x1792', '1792x1024'],
                 'styles': ['vivid', 'natural'],
-                'max_count': 1
+                'max_count': 1,
+                'response_formats': ['url', 'b64_json']
             },
             'dall-e-2': {
                 'qualities': ['standard'],
                 'sizes': ['1024x1024', '512x512', '256x256'],
                 'styles': [None],
-                'max_count': 10
+                'max_count': 10,
+                'response_formats': ['url', 'b64_json']
+            }
+        },
+        'text': {
+            'gpt-3.5-turbo-1106': {
+
+            },
+            'gpt-4-1106-preview': {
+
             }
         }
     }
@@ -347,14 +357,16 @@ class ChatEngine:
         # get the adjusted prompt reconstructed with any custom instructions
         text_prompt = self._handle_role_instructions(text_prompt)
 
-        # Extract parameters with defaults
         model = kwargs.get('image_model', 'dall-e-3')
+        # Fetch model options
+        model_opts = self.MODEL_OPTIONS['image'].get(model, {})
+        # Extract parameters with defaults
         count = kwargs.get('image_count', 1)
         size = kwargs.get('image_size', "1024x1024").lower()
         quality = kwargs.get('image_quality', "standard").lower()
         style = kwargs.get('image_style', 'vivid').lower()
         revised_prompt = kwargs.get('revised_prompt', False)
-
+        response_format = kwargs.get('response_format', 'url')
         # Translate size aliases
         size = self.SIZE_ALIASES.get(size.lower(), size)
 
@@ -362,9 +374,6 @@ class ChatEngine:
         if count > 1 and model != 'dall-e-2':
             model = 'dall-e-2'
             logging.info(f"Reverting to '{model}' since requested image_count > 1")
-
-        # Fetch model options
-        model_opts = self.MODEL_OPTIONS['image'].get(model, {})
 
         # Validate and adjust size, quality, and style
         size = self._validate_model_option(size, model_opts.get('sizes', []), "image_size", model)
@@ -392,7 +401,8 @@ class ChatEngine:
                 n=count,
                 size=size,
                 quality=quality,
-                style=style
+                style=style,
+                response_format=response_format
             )
             logging.info(f"The following settings were used to produce the image:\n"
                          f"model: {model}, count: {count}, size: {size}, quality: "
