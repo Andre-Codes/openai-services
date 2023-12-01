@@ -40,8 +40,8 @@ Alternatively, you can create an instance with a configuration file:
 chat_engine = ChatEngine(api_key='your_openai_api_key', config_path='path_to_config.yaml')
 ```
 
-### Generating Responses
-To generate a text response:
+## Generating Responses
+### Generate a basic text response:
 
 ```python
 response = chat_engine.get_response(
@@ -52,7 +52,87 @@ response = chat_engine.get_response(
 print(response)
 ```
 
-For image generation:
+**Example using a list of messages (assistant/user):**
+```python
+response = chat_engine.get_response(
+    system_role="You respond with a single word.",
+    prompt=["I say red, you say...", "apple", "If I say yellow, you say..."]
+)
+print(response)
+
+# Output:
+# Banana.
+```
+
+***Note:** The above example leaves out the `response_type` parameter. See [Smart Inference](#Smart-Inference) section below.
+
+
+#### Control format style when not using a config file:
+
+When no config file is present to control formatting, or other prompt engineering, the response will return *as is* (plain-text) from the OpenAI API.
+To provide a basic level of control for how text-based responses are returned, you can use the `format_style` parameter and type in the desired format style, e.g. html, markdown, json. This will format the inputted prompt with the correct wording to receive the desired format style.
+
+
+**Note:** When 'json' is passed as the `format_style`
+in conjunction with the 'text' `response_type`, this will enable the API's *JSON mode* "which guarantees the message the model generates is valid JSON."
+
+
+```python
+response = chat_engine.get_response(
+    response_type='text',
+    prompt="compare basic demographics between china and japan using a table",
+    format_style='markdown'
+)
+print(response)
+```
+**raw response output:**
+| Demographics   | China         | Japan         |
+|----------------|---------------|---------------|
+| Population     | 1.4 billion   | 126 million   |
+| Area           | 9.6 million km²| 377 thousand km²|
+| Capital        | Beijing       | Tokyo         |
+| Official Language | Mandarin Chinese | Japanese |
+| Life Expectancy | 76.7 years (male), 81.6 years (female) | 81.1 years (male), 87.3 years (female) |
+| Literacy Rate  | 96.4%         | 99%           |
+| GDP (nominal)  | $14.3 trillion | $5.2 trillion |
+| Currency       | Chinese Yuan (CNY) | Japanese Yen (JPY) |
+
+
+#### Example enabling "json mode":
+```python
+response = chat_engine.get_response(
+    response_type='text',
+    prompt="list the top 3 most populated countries",
+    format_style='json'
+)
+print(response)
+```
+**raw response output:**
+```json
+{
+  "countries": [
+    {
+      "rank": 1,
+      "name": "China",
+      "population": "1,412,600,000"
+    },
+    {
+      "rank": 2,
+      "name": "India",
+      "population": "1,366,200,000"
+    },
+    {
+      "rank": 3,
+      "name": "United States",
+      "population": "331,000,000"
+    }
+  ]
+}
+```
+
+---
+
+### Image generation:
 
 ```python
 response = chat_engine.get_response(
@@ -63,7 +143,7 @@ response = chat_engine.get_response(
 print(response)
 ```
 
-### Using Aliases
+#### Using Aliases
 You can use predefined aliases for image sizes:
 
 ```python
@@ -75,7 +155,7 @@ response = chat_engine.get_response(
 print(response)
 ```
 
-### Generating/Sending Multiple Images
+#### Generating/Sending Multiple Images
 You can generate multiple images with a single prompt:
 
 ```python
@@ -88,6 +168,8 @@ response = chat_engine.get_response(
 print(response)
 ```
 
+---
+
 ### Vision API Usage
 Using the 'vision' `response_type` to send 2 images, and request to compare them using the `text_prompt` parameter:
 
@@ -99,6 +181,8 @@ response = chat_engine.get_response(
 )
 print(response)
 ```
+
+---
 
 ## Intuitive `get_response` Method
 
@@ -115,6 +199,7 @@ The `get_response` method in the `ChatEngine` class is designed to intelligently
 
 This intuitive approach allows users to interact with the ChatEngine more naturally and efficiently, focusing on their requirements without worrying about the underlying API details.
 
+---
 
 ## Using a Configuration File
 
