@@ -73,7 +73,7 @@ When no config file is present to control formatting, or other prompt engineerin
 To provide a basic level of control for how text-based responses are returned, you can use the `format_style` parameter and type in the desired format style, e.g. html, markdown, json. This will format the inputted prompt with the correct wording to receive the desired format style.
 
 
-**Note:** When "json" is passed as the `format_style`
+**Note:** When "`json`" is passed as the `format_style`
 in conjunction with the 'text' `response_type`, this will enable the API's *JSON mode* "which guarantees the message the model generates is valid JSON."
 
 
@@ -168,8 +168,8 @@ response = chat_engine.get_response(
 #### Handling Image API Responses
 The `ChatEngine` class is adept at handling various response formats from the image API. Depending on the user's requirements or the specified response format, it can process and return either URLs or base64 encoded representations of images.
 
-- **URL Responses**: If the response format (`response_format`) is set to "url", the returned response will be direct links to the generated images.
-- **Base64 Encodings**: For use cases requiring embedded images or additional processing, response format can be set to "b64_json", returning the images as encoded strings.
+- **URL Responses**: If the response format (`response_format`) is set to `"url"`, the returned response will be direct links to the generated images.
+- **Base64 Encodings**: For use cases requiring embedded images or additional processing, response format can be set to `"b64_json"`, returning the images as encoded strings.
 
 This flexibility allows for a wide range of applications, from direct image display in web applications to further processing in desktop or server-side applications.
 
