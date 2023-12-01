@@ -1,7 +1,11 @@
+import base64
+import logging
+import os
 import openai
 from openai import OpenAI
+import re
 import yaml
-from typing import Union, Iterator
+from typing import Iterator
 
 
 class ChatEngine:
@@ -68,6 +72,7 @@ class ChatEngine:
 
         If a configuration file is provided, it sets up additional formatting and role contexts.
         """
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
         if config_path:
             with open(config_path, "r") as f:
@@ -189,6 +194,7 @@ class ChatEngine:
 
         This method updates `self.response` with the response from the OpenAI API call.
         """
+        logging.info("Initiating text API call.")
 
         # Check for streaming and format_style in kwargs
         self.stream = kwargs.get('streaming', self.stream)
@@ -237,13 +243,33 @@ class ChatEngine:
 
         This method updates `self.response` with the response from the OpenAI API call.
         """
+        logging.info("Initiating vision API call.")
+
+        processed_prompts = []
+
+        if isinstance(image_prompt, list):
+            for item in image_prompt:
+                if not self._prompt_is_url(item) and not self._prompt_is_base64_image(item) and os.path.isfile(item):
+                    logging.info(f"Encoding image file for vision API")
+                    processed_prompts.append(self.encode_image_prompts(item))
+                else:
+                    processed_prompts.append(item)
+        elif isinstance(image_prompt, str):
+            if not self._prompt_is_url(image_prompt) and not self._prompt_is_base64_image(image_prompt) and os.path.isfile(image_prompt):
+                logging.info(f"Encoding image file for vision API")
+                processed_prompts = self.encode_image_prompts(image_prompt)
+            else:
+                processed_prompts = [image_prompt]
+        else:
+            logging.error("Invalid type for image_prompt in vision API call.")
+            return
 
         # Default text prompt if not provided
-        text_prompt = kwargs.get('text_prompt', "Describe this image.")
+        text_prompt = kwargs.get('text_prompt', "Describe the image(s).")
 
         # Build messages for vision API
-        self._build_messages(prompt=text_prompt, response_type='vision', image_prompts=image_prompt)
-
+        self._build_messages(prompt=text_prompt, response_type='vision', image_prompts=processed_prompts)
+        # logging.info(f"Formatted 'messages' param: {self.__messages}")
         try:
             client = OpenAI()
             response = client.chat.completions.create(
@@ -260,7 +286,10 @@ class ChatEngine:
         except openai.APIError as e:
             raise e
 
-    def _validate_model_option(self, option_value, valid_options, option_name, model=None):
+        logging.info("Vision API call completed.")
+
+    @staticmethod
+    def _validate_model_option(option_value, valid_options, option_name, model=None):
         """
         Validates the given option value against a list of valid options. Ignores the option
         if the model does not support it.
@@ -274,12 +303,13 @@ class ChatEngine:
         Returns:
             str: A valid option value or None if the option is not supported.
         """
+
         if valid_options == [None]:
-            print(f"The parameter '{option_name}' is not supported by the model '{model}'. Ignoring it.")
+            logging.info(f"The parameter '{option_name}' is not supported by the model '{model}'. Ignoring it.")
             return 'vivid'  # something still needs to be passed to the api
         elif valid_options and option_value not in valid_options:
             default = valid_options[0]
-            print(f"Provided {option_name} is invalid for model '{model}'. Defaulting to {default}.")
+            logging.info(f"Provided {option_name} is invalid for model '{model}'. Defaulting to {default}.")
             return default
         return option_value
 
@@ -312,6 +342,7 @@ class ChatEngine:
 
         This method updates `self.response` with the response from the OpenAI API call.
         """
+        logging.info("Initiating image API call.")
 
         # get the adjusted prompt reconstructed with any custom instructions
         text_prompt = self._handle_role_instructions(text_prompt)
@@ -330,6 +361,7 @@ class ChatEngine:
         # Adjusting model for count
         if count > 1 and model != 'dall-e-2':
             model = 'dall-e-2'
+            logging.info(f"Reverting to '{model}' since requested image_count > 1")
 
         # Fetch model options
         model_opts = self.MODEL_OPTIONS['image'].get(model, {})
@@ -338,6 +370,7 @@ class ChatEngine:
         size = self._validate_model_option(size, model_opts.get('sizes', []), "image_size", model)
         quality = self._validate_model_option(quality, model_opts.get('qualities', []), "quality", model)
         style = self._validate_model_option(style, model_opts.get('styles', []), "image_style", model)
+        logging.info(f"Completed validation of selected options for model '{model}'.")
 
         # Validate and adjust count
         if count > model_opts.get('max_count', 1):
@@ -361,7 +394,9 @@ class ChatEngine:
                 quality=quality,
                 style=style
             )
-            print(f"model: {model}, count: {count}, size: {size}, quality: {quality}, style: {style}, preface: '{preface}'")
+            logging.info(f"The following settings were used to produce the image:\n"
+                         f"model: {model}, count: {count}, size: {size}, quality: "
+                         f"{quality}, style: {style}, preface: '{preface}'")
             self.response = response
         except openai.APIConnectionError as e:
             raise e
@@ -464,9 +499,119 @@ class ChatEngine:
 
         return prompt_with_context
 
-    def get_response(self, response_type: str = 'text',
+    def _infer_response_type(self, prompt):
+        """
+        Infers the response type based on the content and format of the prompt.
+        """
+        if isinstance(prompt, list):
+            # If the prompt is a list, check each item
+            if all(isinstance(item, str) and (self._prompt_is_url(item) or self._prompt_is_base64_image(item) or os.path.isfile(item)) for item in prompt):
+                logging.info("Prompt is a list suitable for the vision API.")
+                return 'vision'
+            else:
+                logging.info("Prompt is a list suitable for the text API.")
+                return 'text'
+        elif isinstance(prompt, str):
+            # Check for URL, base64 encoded image, or file path indicative of the vision API
+            if self._prompt_is_url(prompt) or self._prompt_is_base64_image(prompt) or os.path.isfile(prompt):
+                logging.info("Prompt is a string suitable for the vision API.")
+                return 'vision'
+            # Check for keywords indicative of the image API
+            elif self._prompt_suggests_image(prompt):
+                logging.info("Prompt suggests an image generation request.")
+                return 'image'
+            else:
+                logging.info("Prompt is a string suitable for the text API.")
+                return 'text'
+        else:
+            # Default to text if the prompt type is unexpected
+            logging.warning("Prompt type is unexpected. Defaulting to text API.")
+            return 'text'
+
+    @staticmethod
+    def _prompt_is_url(string):
+        """
+        Checks if the string is a URL.
+        """
+        return re.match(r'https?://', string) is not None
+
+    @staticmethod
+    def _prompt_is_base64_image(string):
+        """
+        Checks if the string is a base64 encoded image.
+        """
+        return re.match(r'data:image/.+;base64,', string) is not None
+
+    @staticmethod
+    def _prompt_suggests_image(prompt):
+        """
+        Checks if the prompt starts with phrases that suggest an image generation request.
+        """
+        image_keywords = [
+            'sketch of', 'paint', 'design a', 'visualize',
+            'depict', 'create an image of', 'generate a picture of', 'illustration of',
+            'render', 'artwork of', 'graphic of', 'visual representation of',
+            'art style', 'art format', 'image context', 'image of'
+        ]
+        # Split the prompt into words and consider only the first five
+        first_five_words = ' '.join(prompt.lower().split()[:5])
+        # Check if any of the keywords match within the first five words
+        return any(keyword in first_five_words for keyword in image_keywords)
+
+    @staticmethod
+    def encode_image_prompts(image_file_paths):
+        """
+        Encodes one or multiple image files to base64 data URLs.
+
+        Parameters:
+            image_file_paths (str or list): A single path or a list of paths to the image files.
+
+        Returns:
+            list: List of base64 encoded data URLs of the images.
+        """
+        # if isinstance(image_file_paths, str):
+        #     # If it's a single image path, convert it to a list
+        #     image_file_paths = [image_file_paths]
+        #     logging.info(f"Begin encoding of files: {image_file_paths}")
+
+        def encode_single_image(image_file_path):
+            """Encodes a single image file to a base64 data URL."""
+            if not os.path.isfile(image_file_path):
+                logging.warning(f"File not found: {image_file_path}")
+                return None
+
+            logging.info(f"Encoding image: {image_file_path}")
+            with open(image_file_path, "rb") as image_file:
+                bytes_data = image_file.read()
+
+            file_ext = image_file_path.split('.')[-1].lower()
+            file_ext = mime_to_extension.get(file_ext, file_ext)
+            base64_image = base64.b64encode(bytes_data).decode('utf-8')
+            return f"data:image/{file_ext};base64,{base64_image}"
+
+        mime_to_extension = {
+            'jpeg': 'jpg',
+            'png': 'png',
+            'gif': 'gif',
+            'bmp': 'bmp',
+            'svg+xml': 'svg',
+            'webp': 'webp'
+        }
+
+        if isinstance(image_file_paths, str):
+            # Process a single image file path
+            return encode_single_image(image_file_paths)
+        elif isinstance(image_file_paths, list):
+            # Process a list of image file paths
+            encoded_images = [encode_single_image(path) for path in image_file_paths if path]
+            return [img for img in encoded_images if img]  # Filter out any None values
+
+        logging.warning("Invalid input type for image_file_paths.")
+        return None
+
+    def get_response(self, response_type: str = None,
                      prompt: str | list = None,
-                     raw_output: bool = True, **kwargs) -> Union[str, dict, tuple, list, Iterator]:
+                     raw_output: bool = True, **kwargs) -> str | dict | tuple | list | Iterator:
         """
         Retrieves a response from the OpenAI API based on the specified parameters. This is the main
         method to interact with different OpenAI API functionalities like text, image, and vision responses.
@@ -496,6 +641,10 @@ class ChatEngine:
         Usage Example:
             get_response(response_type='text', prompt='Tell me a joke.', raw_output=False)
         """
+
+        # Automatically determine response type if not provided
+        if not response_type:
+            response_type = self._infer_response_type(prompt)
 
         # validate and set the instance variable for prompt
         self._validate_and_assign_params(prompt)
