@@ -193,7 +193,8 @@ class ChatEngine:
 
         Keyword Arguments:
             streaming (bool, optional): If set to True, the response is streamed. Default is False.
-            format_style (str, optional): The format style to be applied to the response (e.g., 'markdown').
+            format_style (str, optional): The desired format style in which the AI responds (e.g., 'markdown').
+                Not to be confused with `response_format` which determines the format in which the API sends the data.
 
             Other keyword arguments may be passed and will be handled according to the OpenAI API requirements.
 
@@ -358,8 +359,6 @@ class ChatEngine:
         text_prompt = self._handle_role_instructions(text_prompt)
 
         model = kwargs.get('image_model', 'dall-e-3')
-        # Fetch model options
-        model_opts = self.MODEL_OPTIONS['image'].get(model, {})
         # Extract parameters with defaults
         count = kwargs.get('image_count', 1)
         size = kwargs.get('image_size', "1024x1024").lower()
@@ -374,6 +373,9 @@ class ChatEngine:
         if count > 1 and model != 'dall-e-2':
             model = 'dall-e-2'
             logging.info(f"Reverting to '{model}' since requested image_count > 1")
+
+        # Fetch model options
+        model_opts = self.MODEL_OPTIONS['image'].get(model, {})
 
         # Validate and adjust size, quality, and style
         size = self._validate_model_option(size, model_opts.get('sizes', []), "image_size", model)
@@ -392,7 +394,7 @@ class ChatEngine:
             
             """
         else:
-            preface = ""
+            preface = ''
         try:
             client = OpenAI()
             response = client.images.generate(
@@ -406,7 +408,7 @@ class ChatEngine:
             )
             logging.info(f"The following settings were used to produce the image:\n"
                          f"model: {model}, count: {count}, size: {size}, quality: "
-                         f"{quality}, style: {style}, preface: '{preface}'")
+                         f"{quality}, style: {style}, preface: '{revised_prompt}'")
             self.response = response
         except openai.APIConnectionError as e:
             raise e
@@ -619,9 +621,56 @@ class ChatEngine:
         logging.warning("Invalid input type for image_file_paths.")
         return None
 
+    def extract_response(self, response_type, **kwargs):
+        """
+        Extracts and formats the response from the OpenAI API based on the response type.
+
+        Parameters:
+            response_type (str): The type of response ('text', 'image', or 'vision').
+            kwargs: Additional keyword arguments.
+
+        Returns:
+            The formatted response based on the response type.
+        """
+        logging.info(f"Extracting response for type: {response_type}")
+
+        if response_type == 'text':
+            return self.response.choices[0].message.content
+        elif response_type == 'image':
+            return self._extract_image_response(kwargs.get('revised_prompt', False))
+        elif response_type == 'vision':
+            return self.response.choices[0].message.content
+
+    def _extract_image_response(self, revised_prompt):
+        """
+        Extracts the image response, handling URLs and base64 JSON.
+
+        Parameters:
+            revised_prompt (bool): Flag to determine the format of the response.
+
+        Returns:
+            Either a list of image URLs/b64_json or tuples of image URLs/b64_json and revised prompts.
+        """
+
+        if any(getattr(image, 'b64_json', None) for image in self.response.data):
+            # Handling base64 JSON data
+            logging.info("Extracting 'b64_json' image response")
+            data = [getattr(image, 'b64_json', None) for image in self.response.data]
+        else:
+            # Handling URLs
+            logging.info("Extracting 'url' image response")
+            data = [getattr(image, 'url', None) for image in self.response.data]
+
+        if revised_prompt:
+            logging.info("Including revised prompts in response (creates a list of tuples).")
+            revised_prompts = [getattr(image, 'revised_prompt', None) for image in self.response.data]
+            return list(zip(data, revised_prompts))
+
+        return data
+
     def get_response(self, response_type: str = None,
                      prompt: str | list = None,
-                     raw_output: bool = True, **kwargs) -> str | dict | tuple | list | Iterator:
+                     raw_output: bool = False, **kwargs) -> str | dict | tuple | list | Iterator:
         """
         Retrieves a response from the OpenAI API based on the specified parameters. This is the main
         method to interact with different OpenAI API functionalities like text, image, and vision responses.
@@ -656,6 +705,8 @@ class ChatEngine:
         if not response_type:
             response_type = self._infer_response_type(prompt)
 
+        logging.info(f"Getting response: type={response_type}")
+
         # validate and set the instance variable for prompt
         self._validate_and_assign_params(prompt)
         openai.api_key = self.api_key
@@ -665,30 +716,17 @@ class ChatEngine:
             raise ValueError(
                 f"Invalid response type: '{response_type}'. Valid options are: {ChatEngine.VALID_RESPONSE_TYPES}")
 
+        # Call the appropriate API based on response_type
         if response_type == 'text':
             self._text_api_call(text_prompt=prompt, **kwargs)
         elif response_type == 'image':
             self._image_api_call(text_prompt=prompt, **kwargs)
         elif response_type == 'vision':
             self._vision_api_call(image_prompt=prompt, **kwargs)
+
         # Return finished response from OpenAI
         if not raw_output and not self.stream:  # if raw and stream are False
-            if response_type == 'text':
-                return self.response.choices[0].message.content
-            elif response_type == 'image':
-                # Extract URLs into a list of 1 or more
-                image_urls = [image.url for image in self.response.data]
-                # Extract revised prompts (only for dall-e-3) into list
-                # will be list of 'Nones' for older models
-                revised_prompts = [image.revised_prompt for image in self.response.data]
-                # If revised_prompt param is used return the urls and revisions
-                revised_prompt = kwargs.get('revised_prompt', False)
-                if revised_prompt:
-                    return image_urls, revised_prompts
-                else:
-                    print(f"revised prompt: {revised_prompts}")
-                    return image_urls
-            elif response_type == 'vision':
-                return self.response.choices[0].message.content
+            return self.extract_response(response_type, **kwargs)
 
+        print(self.response)
         return self.response
