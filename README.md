@@ -100,6 +100,22 @@ response = chat_engine.get_response(
 print(response)
 ```
 
+## Intuitive `get_response` Method
+
+The `get_response` method in the `ChatEngine` class is designed to intelligently understand and interpret the user's intent based on the provided prompt. This feature enhances user experience by reducing the need for specifying the type of response explicitly.
+
+### Smart Inference
+- **Automatic API Selection**: The method automatically determines whether to call the text, image, or vision API based on the nature of the prompt.
+- **Handling Various Prompt Types**: It can process a wide range of prompt types including strings, lists of strings, URLs, and file paths, intelligently inferring the most appropriate API to use.
+- **Context-Aware**: By analyzing the prompt content (such as keywords for image requests or checking if the input is a file path or URL), `get_response` smartly decides the response type, making the API interaction seamless and user-friendly.
+
+### User-Friendly
+- **Less Manual Input**: Users don't have to manually specify the API type (text, image, or vision), as `get_response` smartly infers this from the prompt.
+- **Flexibility**: The method is flexible enough to handle explicit instructions as well as interpret ambiguous prompts, catering to a wide range of use cases.
+
+This intuitive approach allows users to interact with the ChatEngine more naturally and efficiently, focusing on their requirements without worrying about the underlying API details.
+
+
 ## Using a Configuration File
 
 The ChatEngine class allows the use of a configuration file to define various prompts, roles, and formats for interacting with the OpenAI API. This not only enhances flexibility and usability but also enables sophisticated prompt engineering, allowing for customized and context-specific interactions based on predefined settings.
