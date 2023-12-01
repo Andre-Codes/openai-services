@@ -134,7 +134,7 @@ class ChatEngine:
             raise ValueError("Prompt can't be None.")
         self.prompt = prompt
 
-    def _handle_format_instructions(self, format_style):
+    def _handle_format_instructions(self, format_style, prompt):
         """
         Constructs the final prompt by combining role/context-specific instructions with
         formatting instructions based on the provided format style.
@@ -154,12 +154,14 @@ class ChatEngine:
         """
 
         # get the adjusted prompt reconstructed with any custom instructions
-        adjusted_prompt = self._handle_role_instructions(self.prompt)
+        adjusted_prompt = self._handle_role_instructions(prompt)
 
         if self.role_context != 'general':
             response_formats = self.CONFIG.get('response_formats', {})
             style_name = response_formats.get(format_style, {})
             response_instruct = style_name.get('instruct', '')
+
+            logging.info(f"Adding formatting style instructions from config file for: '{style_name}' ")
 
             if style_name.lower() == 'markdown':
                 md_table_style = style_name.get('table_styles', {}).get(self.MD_TABLE_STYLE, '')
@@ -173,12 +175,15 @@ class ChatEngine:
             self.complete_prompt = f"{response_instruct}{adjusted_prompt}"
 
         # If format_style is specified but no role_context found in CONFIG
-        elif format_style:
-            response_instruct = f"Respond in the following {format_style} format \n\n "
+        elif format_style and format_style != 'text':
+            response_instruct = f"For the following request, respond in {format_style} format:\n "
+            logging.info(f"Adding instructions to use style '{format_style}' from format_style parameter")
             self.complete_prompt = f"{response_instruct}{adjusted_prompt}"
         # Finally, if no format style specified save only the adjusted prompt
         else:
             self.complete_prompt = adjusted_prompt
+
+        logging.info(f"Finished adding custom formatting instructions to text prompt:\n{self.complete_prompt[:100]}...")
 
     def _text_api_call(self, text_prompt, **kwargs):
         """
@@ -209,10 +214,12 @@ class ChatEngine:
 
         # Check for streaming and format_style in kwargs
         self.stream = kwargs.get('streaming', self.stream)
-        format_style = kwargs.get('format_style', None)
+        format_style = kwargs.get('format_style', 'text')
 
-        self._handle_format_instructions(format_style)
+        self._handle_format_instructions(format_style=format_style, prompt=text_prompt)
         self._build_messages(prompt=text_prompt, **kwargs)
+
+        response_format = {"type": "json_object" if format_style.lower() == 'json' else 'text'}
 
         try:
             client = OpenAI()
@@ -221,7 +228,8 @@ class ChatEngine:
                 messages=self.__messages,
                 temperature=self.temperature,
                 top_p=0.2,
-                stream=self.stream
+                stream=self.stream,
+                response_format=response_format
             )
             if response:
                 self.response = response
@@ -275,11 +283,14 @@ class ChatEngine:
             logging.error("Invalid type for image_prompt in vision API call.")
             return
 
-        # Default text prompt if not provided
+        # Get text_prompt and format_style if provided
         text_prompt = kwargs.get('text_prompt', "Describe the image(s).")
+        format_style = kwargs.get('format_style', None)
+
+        self._handle_format_instructions(format_style=format_style, prompt=text_prompt)
 
         # Build messages for vision API
-        self._build_messages(prompt=text_prompt, response_type='vision', image_prompts=processed_prompts)
+        self._build_messages(prompt=self.complete_prompt, response_type='vision', image_prompts=processed_prompts)
         # logging.info(f"Formatted 'messages' param: {self.__messages}")
         try:
             client = OpenAI()
@@ -472,7 +483,7 @@ class ChatEngine:
             # Combine system, user, and assistant messages
             self.__messages = system_msg + user_assistant_msgs
 
-    def _handle_role_instructions(self, user_prompt):
+    def _handle_role_instructions(self, prompt):
         """
         Construct the context for the prompt by adding role/context specific instructions.
 
@@ -482,6 +493,7 @@ class ChatEngine:
         Returns:
             str: The inputted prompt with role/context instructions..
         """
+        logging.info(f"Adding any role/context instructions to text prompt: {prompt[:15]}...")
 
         default_documentation = self.CONFIG.get('role_contexts', {}) \
             .get('defaults', {}).get('documentation', '')
@@ -505,7 +517,7 @@ class ChatEngine:
         self.system_role = system_role
         # construct the prompt by prefixing any role instructions
         # and appending any documentation to the end
-        prompt_with_context = f"{role_instructions}{user_prompt}{documentation}"
+        prompt_with_context = f"{role_instructions}{prompt}{documentation}"
         # raise AssertionError("prompt with context:" + str(prompt_with_context))
         self.prompt = prompt_with_context
 
