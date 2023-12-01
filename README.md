@@ -52,7 +52,7 @@ response = chat_engine.get_response(
 print(response)
 ```
 
-**Example using a list of messages (assistant/user):**
+**Example using a list of messages (user\assistant):**
 ```python
 response = chat_engine.get_response(
     system_role="You respond with a single word.",
