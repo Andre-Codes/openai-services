@@ -67,7 +67,8 @@ class ChatEngine:
     VALID_RESPONSE_TYPES = {'text', 'image', 'vision'}
 
     def __init__(self, role_context=None, system_role=None, temperature=1,
-                 model="gpt-3.5-turbo", stream=False, api_key=None, config_path=None):
+                 model="gpt-3.5-turbo", stream=False, api_key=None,
+                 config_path=None, enable_logging=False):
         """
         Initializes the ChatEngine instance with various configuration settings.
 
@@ -83,6 +84,8 @@ class ChatEngine:
         If a configuration file is provided, it sets up additional formatting and role contexts.
         """
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
+        if not enable_logging:
+            logging.disable(logging.CRITICAL)
 
         if config_path:
             with open(config_path, "r") as f:
@@ -93,8 +96,8 @@ class ChatEngine:
         # Set system role
         self.system_role = system_role or "You're a helpful assistant who answers questions."
 
-        # Set up API access
-        self.api_key = api_key
+        # Set up API access key
+        OpenAI.api_key = api_key
 
         # Turn off/on streaming of response
         self.stream = stream
@@ -721,12 +724,13 @@ class ChatEngine:
 
         # validate and set the instance variable for prompt
         self._validate_and_assign_params(prompt)
-        openai.api_key = self.api_key
 
         # Validate the response type
         if response_type not in ChatEngine.VALID_RESPONSE_TYPES:
             raise ValueError(
-                f"Invalid response type: '{response_type}'. Valid options are: {ChatEngine.VALID_RESPONSE_TYPES}")
+                f"Invalid response type: '{response_type}'. "
+                f"Valid options are: {ChatEngine.VALID_RESPONSE_TYPES}"
+            )
 
         # Call the appropriate API based on response_type
         if response_type == 'text':
