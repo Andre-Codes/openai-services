@@ -69,30 +69,68 @@ def process_message_content(client, message):
             download_file(client, file_id, f"./image_{file_id}.png")
 
 
-def process_thread_messages(client, thread_id, **kwargs):
-    messages = list_messages(client, thread_id).data
-    file_path = kwargs.get('file_path', None)
+def process_message(client, message, file_name_id_dict, print_text=True):
+    print(f"Message ID: {message.id}, "
+          f"Role: {message.role}, "
+          f"Created At: {message.created_at}")
+    print('#'*40)
 
-    for message in messages:
-        print(f"Message ID: {message.id}, "
-              f"Role: {message.role}, "
-              f"Created At: {message.created_at}")
-        for content in message.content:
-            if content.type == 'text':
+    for content_idx, content in enumerate(message.content):
+        if content.type == 'text':
+            if print_text:
                 print("Text:", content.text.value)
-                for index, annotation in enumerate(content.text.annotations, start=1):
-                    if annotation.type == 'file_path':
-                        file_id = annotation.file_path.file_id
-                        if file_path is None:
-                            file_info = client.files.retrieve(file_id)
-                            file_path = Path(file_info.filename).name  # removes '/mnt/data/'
-                            file_path = f"{index}_{file_path}"
-                        download_file(client, file_id, file_path)
+            for annot_idx, annotation in enumerate(content.text.annotations, start=1):
+                file_citation = getattr(annotation, 'file_citation', None)
+                file_path = getattr(annotation, 'file_path', None)
 
-            elif content.type == 'image_file':
-                file_id = content.image_file.file_id
-                file_path = file_path or 'image_' + file_id
-                download_file(client, file_id, f"{file_path}.png")
+                if file_citation:
+                    cited_file = client.files.retrieve(file_citation.file_id)
+                    file_name_id_dict[f'{annot_idx}_{cited_file.filename}'] = file_citation.file_id
+                    print(f'[{annot_idx}] {file_citation.quote} from {cited_file.filename}')
+
+                elif file_path:
+                    file_id = file_path.file_id
+                    file_info = client.files.retrieve(file_id)
+                    file_name = f"{Path(file_info.filename).stem}" \
+                                f"_{annot_idx}{Path(file_info.filename).suffix}"
+                    file_name_id_dict[file_name] = file_id
+
+        elif content.type == 'image_file':
+            file_id = content.image_file.file_id
+            file_info = client.files.retrieve(file_id)
+            file_name = f"{Path(file_info.filename).stem}" \
+                        f"_{content_idx}{Path(file_info.filename).suffix}"
+            file_name_id_dict[file_name] = file_id
+
+
+def process_thread_messages(client, thread_id, message_id=None,
+                            index=None, role=None, **kwargs):
+
+    print_text = kwargs.get('print_text', False)
+    messages = list_messages(client, thread_id).data
+    if role:
+        if role not in ['assistant', 'user']:
+            raise ValueError(f"Invalid role: '{role}'.")
+        else:
+            messages = [message for message in messages if message.role == role]
+
+    file_name_id_dict = {}  # Dictionary to store filename:file_id pairs
+    if message_id:
+        message = next((msg for msg in messages if msg.id == message_id), None)
+        if message:
+            process_message(client, message, file_name_id_dict, print_text=print_text)
+        else:
+            print("Message ID not found.")
+    elif index is not None:
+        if 0 <= index < len(messages):
+            process_message(client, messages[index], file_name_id_dict, print_text=print_text)
+        else:
+            print("Index out of range.")
+    else:
+        for message in messages:
+            process_message(client, message, file_name_id_dict, print_text=print_text)
+
+    return file_name_id_dict
 
 
 def create_run(client, thread_id, assistant_id):
