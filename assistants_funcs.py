@@ -27,17 +27,19 @@ def create_message(client, thread_id, content, role="user"):
     )
 
 
-def list_messages(client, thread_id):
+def list_messages(client, thread_id, order='asc', **kwargs):
+    order = kwargs.get('order', order)
     return client.beta.threads.messages.list(
-        thread_id=thread_id
+        thread_id=thread_id,
+        order=order
     )
 
 
-def retrieve_message(client, thread_id):
+def retrieve_message(client, thread_id, index=0):
     message_object = list_messages(client, thread_id)
     return client.beta.threads.messages.retrieve(
         thread_id=thread_id,
-        message_id=message_object.data[0].id
+        message_id=message_object.data[index].id
     )
 
 
@@ -70,10 +72,11 @@ def process_message_content(client, message):
 
 
 def process_message(client, message, file_name_id_dict, print_text=True):
+    print('#'*40, '\n', '#'*40)
     print(f"Message ID: {message.id}, "
           f"Role: {message.role}, "
           f"Created At: {message.created_at}")
-    print('#'*40)
+    print('_'*40)
 
     for content_idx, content in enumerate(message.content):
         if content.type == 'text':
@@ -107,7 +110,8 @@ def process_thread_messages(client, thread_id, message_id=None,
                             index=None, role=None, **kwargs):
 
     print_text = kwargs.get('print_text', False)
-    messages = list_messages(client, thread_id).data
+
+    messages = list_messages(client, thread_id, **kwargs).data
     if role:
         if role not in ['assistant', 'user']:
             raise ValueError(f"Invalid role: '{role}'.")
@@ -122,7 +126,7 @@ def process_thread_messages(client, thread_id, message_id=None,
         else:
             print("Message ID not found.")
     elif index is not None:
-        if 0 <= index < len(messages):
+        if 0 <= abs(index) < len(messages):
             process_message(client, messages[index], file_name_id_dict, print_text=print_text)
         else:
             print("Index out of range.")
