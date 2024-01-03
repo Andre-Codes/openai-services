@@ -35,12 +35,20 @@ def list_messages(client, thread_id, order='asc', **kwargs):
     )
 
 
-def retrieve_message(client, thread_id, index=0):
+def retrieve_message(client, thread_id, index=None, message_id=None):
     message_object = list_messages(client, thread_id)
-    return client.beta.threads.messages.retrieve(
+    if index:
+        message_id = message_object.data[index].id
+    elif message_id:
+        message_id = message_id
+    else:
+        message_id = message_object.data[0].id
+
+    message = client.beta.threads.messages.retrieve(
         thread_id=thread_id,
-        message_id=message_object.data[index].id
+        message_id=message_id
     )
+    return message
 
 
 def infer_file_extension(file_path):
@@ -71,16 +79,20 @@ def process_message_content(client, message):
             download_file(client, file_id, f"./image_{file_id}.png")
 
 
-def process_message(client, message, file_name_id_dict, print_text=True):
-    print('#'*40, '\n', '#'*40)
+def process_message(client, message, print_content=True, **kwargs):
+    print(f"{'#' * 40}\n{'#' * 40}")
     print(f"Message ID: {message.id}, "
           f"Role: {message.role}, "
           f"Created At: {message.created_at}")
     print('_'*40)
 
+    print_content = kwargs.get('print_content', print_content)
+    content_text_values = ''
+    file_name_id_dict = {}  # Dictionary storing filename:file_id pairs
     for content_idx, content in enumerate(message.content):
         if content.type == 'text':
-            if print_text:
+            content_text_values += content.text.value
+            if print_content:
                 print("Text:", content.text.value)
             for annot_idx, annotation in enumerate(content.text.annotations, start=1):
                 file_citation = getattr(annotation, 'file_citation', None)
@@ -105,11 +117,11 @@ def process_message(client, message, file_name_id_dict, print_text=True):
                         f"_{content_idx}{Path(file_info.filename).suffix}"
             file_name_id_dict[file_name] = file_id
 
+    return {'files': file_name_id_dict, 'text': content_text_values}
+
 
 def process_thread_messages(client, thread_id, message_id=None,
                             index=None, role=None, **kwargs):
-
-    print_text = kwargs.get('print_text', False)
 
     messages = list_messages(client, thread_id, **kwargs).data
     if role:
@@ -118,23 +130,25 @@ def process_thread_messages(client, thread_id, message_id=None,
         else:
             messages = [message for message in messages if message.role == role]
 
-    file_name_id_dict = {}  # Dictionary to store filename:file_id pairs
     if message_id:
         message = next((msg for msg in messages if msg.id == message_id), None)
         if message:
-            process_message(client, message, file_name_id_dict, print_text=print_text)
+            response = process_message(client, message, **kwargs)
         else:
             print("Message ID not found.")
     elif index is not None:
         if 0 <= abs(index) < len(messages):
-            process_message(client, messages[index], file_name_id_dict, print_text=print_text)
+            response = process_message(client, messages[index], **kwargs)
         else:
             print("Index out of range.")
     else:
+        # Process all messages
+        response = []
         for message in messages:
-            process_message(client, message, file_name_id_dict, print_text=print_text)
+            message_content = process_message(client, message, **kwargs)
+            response.append(message_content)
 
-    return file_name_id_dict
+    return response
 
 
 def create_run(client, thread_id, assistant_id):
@@ -149,7 +163,7 @@ def check_run_status(client, thread_id, run_id):
     return run.status
 
 
-def download_file(client, file_id, file_path):
+def download_file(client, file_path, file_id):
     file_content = client.files.content(file_id).read()
     with open(file_path, "wb") as file:
         file.write(file_content)
