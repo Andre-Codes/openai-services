@@ -1,7 +1,7 @@
 from AssistantEngine import AssistantEngine
 
 assistant_engine = AssistantEngine()
-
+assistant_engine.get_assistants()
 ###################################
 # CREATE AND RUN AN ASSISTANT
 ###################################
@@ -14,18 +14,25 @@ assistant_engine = AssistantEngine()
 # used to view the thread of messages and download any generated files
 
 # 1. Create an Assistant
+files = [r"C:\Users\havok\Downloads\thoelogy_pdfs\Ice, Thomas - Has Bible Prophecy Already Been Fulfilled.pdf",
+r"C:\Users\havok\Downloads\thoelogy_pdfs\Ice, Thomas - Evaluation of Theonomic Neopostmillennialism.pdf"]
+
 assistant = assistant_engine.create_assistant(
-    name="DataAnalysis",
-    instructions="You're an assistant who helps with creating data visualizations.",
-    tools=[{"type": "code_interpreter"}]
+    name="Theology",
+    instructions="You're scholar of theology. You answer questions related to"
+                 "scholarly work.",
+    tools=["retrieval"],
+    files=files
 )
 
 # 2. Create a Thread
 thread = assistant_engine.create_thread()
 
 # 3. Add Messages to the Thread
-prompt = "I need a csv file of a public dataset. Then create two data visualization" \
-         "image files for the data."
+prompt = "There's some dispute on how to interpret prophecy, especially prophecy that" \
+         "seemingly has not come to pass. According to these documents, how should" \
+         "prophetic events be interpreted and should we interpret events surrounding Jesus's" \
+         "return literally, e.g. the period of 'tribulation'? Pull from each document. Provide citations."
 message = assistant_engine.create_message(prompt)
 
 # 4. Run the Assistant on the Thread to trigger responses
@@ -46,14 +53,18 @@ assistant_engine.check_run_status(run_object=run, continuous=True)
 messages_response = assistant_engine.process_thread_messages(
     thread.id,
     print_content=True,
-    order='asc'
+    order='asc',
+    role='assistant'
 )
+print("#"*50)
 print(messages_response)
+assistant_engine.get_messages()
+
 
 # List all the files from each message if exist
-# for message in messages_response:
-#     if message['files']:
-#         print(list(message['files'].keys()))
+for message in messages_response:
+    if message['files']:
+        print(list(message['files']))
 
 # Extract code from the text value
 # pattern = r"```python\n(.*?)```"
@@ -69,3 +80,7 @@ assistant_engine.download_files(
 
 # Delete all assistants created in this instance
 assistant_engine.delete_assistants()
+
+# Delete all uploaded files
+for file in assistant_engine.client.files.list().data:
+    assistant_engine.client.files.delete(file.id)

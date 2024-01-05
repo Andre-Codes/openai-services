@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+import warnings
 from pathlib import Path
 
 import openai
@@ -17,25 +18,68 @@ class AssistantEngine:
         self.threads = {}
         self.runs = {}
 
-    def create_assistant(self, name, instructions, model=None, tools=None):
-        tools = tools or []
-        model = model or self.model
-        assistant = self.client.beta.assistants.create(
-            name=name,
-            instructions=instructions,
-            tools=tools,
-            model=model
-        )
+    def create_assistant(self, name, instructions, files=None, **kwargs):
+
+        if files is not None:
+            if not isinstance(kwargs['tools'], list):
+                raise TypeError("The 'files' parameter must be a list.")
+            kwargs['file_ids'] = self.create_file(files, key='id')
+
+        if 'tools' in kwargs:
+            if not isinstance(kwargs['tools'], list):
+                raise TypeError("The 'tools' parameter must be a list.")
+
+            kwargs['tools'] = [{"type": tool} for tool in kwargs['tools']]
+            if 'retrieval' in kwargs['tools'] and files is None:
+                warnings.warn(
+                    "The 'Retrieval' tool was found in the 'tools' parameter "
+                    "without any 'files' provided.", UserWarning
+                )
+
+        # Ensure 'model' has a default value if not provided
+        kwargs.setdefault('model', self.model)
+
+        # Call the create method with name, instructions, and other parameters
+        assistant = self.client.beta.assistants.create(name=name, instructions=instructions, **kwargs)
         self.assistants[name] = assistant
         self.assistants_id_to_name[assistant.id] = name
         return assistant
+
+    def create_file(self, files, key=None):
+        MAX_FILES = 20
+        MAX_SIZE_MB = 512
+        MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024
+
+        def process_single_file(path):
+            # Check file size
+            if os.path.getsize(path) > MAX_SIZE_BYTES:
+                raise ValueError(f"File '{path}' exceeds the maximum size of {MAX_SIZE_MB} MB.")
+
+            with open(path, "rb") as file:
+                file_obj = self.client.files.create(
+                    file=open(path, "rb"),
+                    purpose='assistants'
+                )
+            return getattr(file_obj, key, None) if key else file_obj
+
+        # Ensure filepath is a list
+        if not isinstance(files, list):
+            files = [files]
+
+        if len(files) > MAX_FILES:
+            raise ValueError(f"You can attach a maximum of {MAX_FILES} files per Assistant.")
+
+        # Process files
+        return [process_single_file(path) for path in files]
 
     def create_thread(self):
         thread = self.client.beta.threads.create()
         self.threads[thread.id] = thread
         return thread
 
-    def create_message(self, thread_id, content):
+    def create_message(self, content, thread_id=None):
+
+        thread_id = list(self.threads)[0] if thread_id is None else thread_id
         if thread_id in self.threads:
             return self.client.beta.threads.messages.create(
                 thread_id=thread_id, role="user", content=content
@@ -43,8 +87,9 @@ class AssistantEngine:
         else:
             raise ValueError("Thread ID not found.")
 
-    def get_messages(self, thread_id, order='asc', **kwargs):
+    def get_messages(self, thread_id=None, order='asc', **kwargs):
         order = kwargs.get('order', order)
+        thread_id = list(self.threads)[0] if thread_id is None else thread_id
         return self.client.beta.threads.messages.list(
             thread_id=thread_id,
             order=order
@@ -62,40 +107,47 @@ class AssistantEngine:
         file_name_id_dict = {}  # Dictionary storing filename:file_id pairs
         for content_idx, content in enumerate(message.content):
             if content.type == 'text':
-                content_text_values += content.text.value
-                if print_content:
-                    print("Text:", content.text.value)
 
+                content_text_values += content.text.value
                 for annot_idx, annotation in enumerate(content.text.annotations, start=1):
                     file_citation = getattr(annotation, 'file_citation', None)
                     file_path = getattr(annotation, 'file_path', None)
 
+                    content_text_values = content_text_values.replace(annotation.text, f' [{annot_idx}]')
+
                     if file_citation:
+                        print(annotation.text)
                         cited_file_id = file_citation.file_id
-                        file_name, _ = self.process_file_info(cited_file_id, annot_idx)
+                        file_name, _ = self.process_file_info(cited_file_id, annot_idx, 'file_citation')
                         file_name_id_dict[file_name] = cited_file_id
                         print(f'[{annot_idx}] {file_citation.quote} from {file_name}')
 
                     elif file_path:
                         file_id = file_path.file_id
-                        file_name, _ = self.process_file_info(file_id, annot_idx)
+                        file_name, _ = self.process_file_info(file_id, annot_idx, 'file_path')
+                        print(file_name)
                         if file_name not in file_name_id_dict:
                             file_name_id_dict[file_name] = file_id
 
+                if print_content:
+                    print("Text:", content_text_values)
+
             elif content.type == 'image_file':
                 file_id = content.image_file.file_id
-                file_name, _ = self.process_file_info(file_id, content_idx)
+                file_name, _ = self.process_file_info(file_id, content_idx, 'image_file')
+                print(file_name)
                 if file_name not in file_name_id_dict:
                     file_name_id_dict[file_name] = file_id
 
             return {'files': file_name_id_dict, 'text': content_text_values}
 
-    def process_file_info(self, file_id, identifier):
+    def process_file_info(self, file_id, identifier, file_type):
         """Helper function to parse file info."""
         file_info = self.client.files.retrieve(file_id)
         full_filename = Path(file_info.filename).name
         file_stem = Path(file_info.filename).stem
         file_ext = Path(file_info.filename).suffix
+        file_ext = '.png' if file_ext == '' and file_type == 'image_file' else file_ext
         file_name_edit = f"{file_stem}_{identifier}{file_ext}"
         return full_filename, file_name_edit
 
@@ -133,7 +185,13 @@ class AssistantEngine:
 
         return response
 
-    def create_run(self, thread_id, assistant_id):
+    def create_run(self, thread_id=None, assistant_id=None):
+
+        thread_id = list(self.threads)[0] if thread_id is None else thread_id
+        assistant_id = (
+            list(self.assistants_id_to_name)[0] if assistant_id is None else assistant_id
+        )
+
         if thread_id in self.threads and assistant_id in self.assistants_id_to_name:
             run = self.client.beta.threads.runs.create(
                 thread_id=thread_id, assistant_id=assistant_id
@@ -248,4 +306,3 @@ class AssistantEngine:
             files_dict = message_content['files']
             for filename, file_id in files_dict.items():
                 self.download_file(filename, file_id)
-
