@@ -1,8 +1,8 @@
 
-# ChatEngine
+# GPT Utils & ChatEngine
 
 ## Introduction
-`ChatEngine` is a Python class designed for interacting with GPT models via the OpenAI API. It provides an easy-to-use interface for generating responses from text, image, and vision models, offering a flexible and powerful tool for various AI-driven applications.
+The `ChatEngine` class, as part of GPT Utils, is designed for interacting with GPT models via the OpenAI API. It provides an easy-to-use interface for generating responses from text, image, and vision models, offering a flexible and powerful tool for various AI-driven applications.
 
 ## Features
 - Supports various GPT models including the latest GPT-4 models.
