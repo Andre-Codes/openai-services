@@ -105,32 +105,41 @@ class AssistantEngine:
         print_content = kwargs.get('print_content', print_content)
         content_text_values = ''
         file_name_id_dict = {}  # Dictionary storing filename:file_id pairs
+        file_citations_list = []
         for content_idx, content in enumerate(message.content):
             if content.type == 'text':
 
                 content_text_values += content.text.value
+                last_citation_value = None
+                footnote_index = 0
                 for annot_idx, annotation in enumerate(content.text.annotations, start=1):
                     file_citation = getattr(annotation, 'file_citation', None)
                     file_path = getattr(annotation, 'file_path', None)
 
-                    content_text_values = content_text_values.replace(annotation.text, f' [{annot_idx}]')
-
+                    footnote_index += 1
+                    current_citation_value = annotation.text
+                    content_text_values = content_text_values.replace(current_citation_value, f' [{footnote_index}]')
                     if file_citation:
                         print(annotation.text)
                         cited_file_id = file_citation.file_id
                         file_name, _ = self.process_file_info(cited_file_id, annot_idx, 'file_citation')
                         file_name_id_dict[file_name] = cited_file_id
-                        print(f'[{annot_idx}] {file_citation.quote} from {file_name}')
+                        if current_citation_value != last_citation_value:
+                            file_citations_list.append({'index': annot_idx, 'quote': file_citation.quote, 'source': file_name})
+                        else:
+                            footnote_index -= 1
+                            print(f"current: {current_citation_value} == last: {last_citation_value}")
+                        last_citation_value = current_citation_value
 
                     elif file_path:
                         file_id = file_path.file_id
                         file_name, _ = self.process_file_info(file_id, annot_idx, 'file_path')
-                        print(file_name)
                         if file_name not in file_name_id_dict:
                             file_name_id_dict[file_name] = file_id
 
                 if print_content:
-                    print("Text:", content_text_values)
+                    print(f"Text: {content_text_values}")
+                    print(f"Citations: {file_citations_list}")
 
             elif content.type == 'image_file':
                 file_id = content.image_file.file_id
@@ -139,7 +148,13 @@ class AssistantEngine:
                 if file_name not in file_name_id_dict:
                     file_name_id_dict[file_name] = file_id
 
-            return {'files': file_name_id_dict, 'text': content_text_values}
+            extracted_content = {
+                'files': file_name_id_dict,
+                'text': content_text_values,
+                'citations': file_citations_list
+            }
+
+            return extracted_content
 
     def process_file_info(self, file_id, identifier, file_type):
         """Helper function to parse file info."""

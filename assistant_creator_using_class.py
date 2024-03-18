@@ -14,9 +14,7 @@ assistant_engine.get_assistants()
 # used to view the thread of messages and download any generated files
 
 # 1. Create an Assistant
-files = [r"C:\Users\havok\Downloads\thoelogy_pdfs\Ice, Thomas - Has Bible Prophecy Already Been Fulfilled.pdf",
-r"C:\Users\havok\Downloads\thoelogy_pdfs\Ice, Thomas - Evaluation of Theonomic Neopostmillennialism.pdf"]
-
+files = [r"C:\Users\havok\OneDrive\Documents\Bullinger - Commentary on Revelation.pdf"]
 assistant = assistant_engine.create_assistant(
     name="Theology",
     instructions="You're scholar of theology. You answer questions related to"
@@ -29,10 +27,8 @@ assistant = assistant_engine.create_assistant(
 thread = assistant_engine.create_thread()
 
 # 3. Add Messages to the Thread
-prompt = "There's some dispute on how to interpret prophecy, especially prophecy that" \
-         "seemingly has not come to pass. According to these documents, how should" \
-         "prophetic events be interpreted and should we interpret events surrounding Jesus's" \
-         "return literally, e.g. the period of 'tribulation'? Pull from each document. Provide citations."
+prompt = "Find information from this document, create a summary of the author's" \
+         "argument for literal interpretation, in a neat, concise outline form."
 message = assistant_engine.create_message(prompt)
 
 # 4. Run the Assistant on the Thread to trigger responses
@@ -56,10 +52,12 @@ messages_response = assistant_engine.process_thread_messages(
     order='asc',
     role='assistant'
 )
-print("#"*50)
-print(messages_response)
-assistant_engine.get_messages()
+print("#" * 50)
+print(messages_response[0]['text'])
+for citation in messages_response[0]['citations']:
+    print(citation['index'], citation['quote'], citation['source'], '\n\n')
 
+assistant_engine.get_messages()
 
 # List all the files from each message if exist
 for message in messages_response:
