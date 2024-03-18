@@ -284,7 +284,12 @@ class AssistantEngine:
         for assistant in assistants.data:
             if specific_id is None or assistant.id == specific_id:
                 self.client.beta.assistants.delete(assistant.id)
-                print(f"Deleted Assistant: {assistant.id}")
+                print(
+                    f"Deleted Assistant: {assistant.id} "
+                    f"({self.assistants_id_to_name[assistant.id]})"
+                )
+                # Remove from assistant dict
+                del self.assistants_id_to_name[assistant.id]
                 if specific_id is not None:
                     break  # Stop after deleting the specific assistant
 
