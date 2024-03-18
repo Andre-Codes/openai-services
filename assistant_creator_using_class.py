@@ -14,11 +14,17 @@ assistant_engine.get_assistants()
 # used to view the thread of messages and download any generated files
 
 # 1. Create an Assistant
-files = [r"C:\Users\havok\OneDrive\Documents\Bullinger - Commentary on Revelation.pdf"]
+files = [r"C:\Users\havok\GitHub\Streamlit Gen\Streamlit_App_Generation_Guide.md",
+         r"C:\Users\havok\GitHub\Streamlit Gen\streamlit_app_gen\app_gen.py",
+         r"C:\Users\havok\GitHub\Streamlit Gen\streamlit_app_gen\config\config_main_adv_refs.yaml"]
 assistant = assistant_engine.create_assistant(
-    name="Theology",
-    instructions="You're scholar of theology. You answer questions related to"
-                 "scholarly work.",
+    name="Streanlit_Design_Tools_Analysis",
+    instructions="You're an expert in documentation for a Python module. You are"
+                 "provided 3 files; First, a markdown file with the documentation. "
+                 "Use the MD file for how-to, documentation related questions. "
+                 "Second, the main .py file containing the code. Third, a YAML"
+                 " file containing an example configuration that the .py file "
+                 "processes to create a Streamlit app.",
     tools=["retrieval"],
     files=files
 )
@@ -27,8 +33,8 @@ assistant = assistant_engine.create_assistant(
 thread = assistant_engine.create_thread()
 
 # 3. Add Messages to the Thread
-prompt = "Find information from this document, create a summary of the author's" \
-         "argument for literal interpretation, in a neat, concise outline form."
+prompt = "can you show more of the relevant code for how a session tag, for example, " \
+         "is processed?"
 message = assistant_engine.create_message(prompt)
 
 # 4. Run the Assistant on the Thread to trigger responses
@@ -77,7 +83,7 @@ assistant_engine.download_files(
 ###################################
 
 # Delete all assistants created in this instance
-assistant_engine.delete_assistants()
+assistant_engine.delete_assistants(specific_id='asst_zCsN3ZFzYNDxhEowB2QXUxuc')
 
 # Delete all uploaded files
 for file in assistant_engine.client.files.list().data:
