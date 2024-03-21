@@ -17,6 +17,7 @@ class AssistantEngine:
         self.assistants_id_to_name = {}
         self.threads = {}
         self.runs = {}
+        self.processed_messages = []
 
     def create_assistant(self, name, instructions, files=None, **kwargs):
 
@@ -95,7 +96,7 @@ class AssistantEngine:
             order=order
         )
 
-    def process_message(self, message, print_content=True, **kwargs):
+    def parse_message_object(self, message, print_content=True, **kwargs):
         print(f"{'#' * 40}\n{'#' * 40}")
         print(f"Message ID: {message.id}, "
               f"Role: {message.role}, "
@@ -150,15 +151,19 @@ class AssistantEngine:
                     file_name_id_dict[file_name] = file_id
 
             extracted_content = {
-                'files': file_name_id_dict,
                 'text': content_text_values,
-                'citations': file_citations_list
+                'citations': file_citations_list,
+                'files': file_name_id_dict
             }
+
+            self.processed_messages.append(extracted_content)
 
             return extracted_content
 
     def process_file_info(self, file_id, identifier, file_type):
-        """Helper function to parse file info."""
+        """
+        Helper function to pass the appropriate message object to `process_thread_messages()`
+        """
         file_info = self.client.files.retrieve(file_id)
         full_filename = Path(file_info.filename).name
         file_stem = Path(file_info.filename).stem
@@ -168,13 +173,40 @@ class AssistantEngine:
         return full_filename, file_name_edit
 
     def process_thread_messages(self, thread_id, message_id=None,
-                                index=None, role=None, **kwargs):
+                                index=None, role=None, **kwargs) -> list | dict:
+        """
+        Processes messages within a specified thread, optionally filtering by message ID,
+        index, role, or other criteria provided via `kwargs`.
 
+        Args:
+            thread_id (str): The ID of the thread whose messages are to be processed.
+            message_id (str, optional): Specific message ID to process. If specified,
+                only this message will be processed. Defaults to None.
+            index (int, optional): Index of the message in the thread to process.
+                If specified, only the message at this index is processed. Negative
+                indices are supported, following Python's list indexing conventions.
+                Defaults to None.
+            role (str, optional): Role to filter messages by before processing. Only
+                messages with this role will be processed. Valid roles include 'assistant'
+                and 'user'. Defaults to None.
+            **kwargs: Additional keyword arguments that will be passed to the message
+                processing function.
+
+        Returns:
+            list | dict: If `index` is specified, returns a single dictionary representing
+            the processed message; text, citations, & files. Otherwise, returns a list of dictionaries, each
+            representing a processed message. The content of the returned
+            objects depend on the response from the API & processing performed by `parse_message_object()`.
+
+        Raises:
+            ValueError: If `thread_id` is not found or if an invalid `role` is specified.
+    """
         if thread_id not in self.threads:
             raise ValueError("Thread ID not found.")
 
+        # Process all message in the active thread
         message_objects = self.get_messages(thread_id, **kwargs).data
-        response = None
+
         # Filter messages for specified role
         if role:
             if role not in ['assistant', 'user']:
@@ -182,28 +214,50 @@ class AssistantEngine:
             else:
                 message_objects = [m for m in message_objects if m.role == role]
 
+        response = None
         if message_id:
             message = next((m for m in message_objects if m.id == message_id), None)
             if message:
-                response = self.process_message(message, **kwargs)
+                response = self.parse_message_object(message, **kwargs)
             else:
                 print("Message ID not found.")
         elif index is not None:
             if 0 <= abs(index) < len(message_objects):
-                response = self.process_message(message_objects[index], **kwargs)
+                response = self.parse_message_object(message_objects[index], **kwargs)
             else:
                 print("Index out of range.")
         else:
             response = []
             for message in message_objects:
-                message_content = self.process_message(message, **kwargs)
+                message_content = self.parse_message_object(message, **kwargs)
                 response.append(message_content)
 
         return response
 
-    def create_run(self, thread_id=None, assistant_id=None):
+    def stream_text_response(self, response):
+        for event in response:
+            # Check if the event is a ThreadMessageDelta
+            if event.event == 'thread.message.delta':
+                for content_block in event.data.delta.content:
+                    if content_block.type == 'text':
+                        yield content_block.text.value
 
-        thread_id = list(self.threads)[0] if thread_id is None else thread_id
+    def get_response(self, thread_id=None, assistant_id=None, stream=False):
+        """
+        Creates a 'run' and returns the run object or a stream of the message
+        response if `stream=True`
+
+        Args:
+            thread_id:
+            assistant_id:
+            stream:
+
+        Returns:
+
+        """
+        thread_id = (
+            list(self.threads)[0] if thread_id is None else thread_id
+        )
         assistant_id = (
             list(self.assistants_id_to_name)[0] if assistant_id is None else assistant_id
         )
@@ -212,25 +266,17 @@ class AssistantEngine:
         #  class vars upon instantiation. For now, check for asst id is commented out,
         #  so an existing asst id can be passed.
         if thread_id in self.threads:  # and assistant_id in self.assistants_id_to_name
-            stream = self.client.beta.threads.runs.create(
+            response = self.client.beta.threads.runs.create(
                 thread_id=thread_id,
                 assistant_id=assistant_id,
-                stream=True
+                stream=stream
             )
 
-            full_text = ""
-            # Loop through each event in the stream
-            for event in stream:
-                # Check if the event is a ThreadMessageDelta
-                if event.event == 'thread.message.delta':
-                    # Access the content list within the delta
-                    for content_block in event.data.delta.content:
-                        # Check if the content block is of type 'text'
-                        if content_block.type == 'text':
-                            # Extract the 'value' and concatenate it to the full_text string
-                            full_text += content_block.text.value or ''
-                            print(content_block.text.value, end="", flush=True)
-            print(f"\n\n###### FULL TEXT ###### \n\n {full_text}")
+            # Create iterator for stream of response text
+            if stream:
+                return self.stream_text_response(response)
+            else:
+                return response
 
         else:
             raise ValueError("Invalid thread or assistant ID.")
@@ -305,10 +351,12 @@ class AssistantEngine:
                 self.client.beta.assistants.delete(assistant.id)
                 print(
                     f"Deleted Assistant: {assistant.id} "
-                    f"({self.assistants_id_to_name[assistant.id]})"
+                    f"({assistant.name})"
                 )
                 # Remove from assistant dict
-                del self.assistants_id_to_name[assistant.id]
+                if assistant.id in self.assistants_id_to_name:
+                    del self.assistants_id_to_name[assistant.id]
+
                 if specific_id is not None:
                     break  # Stop after deleting the specific assistant
 

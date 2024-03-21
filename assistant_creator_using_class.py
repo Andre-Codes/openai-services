@@ -1,3 +1,5 @@
+import re
+
 from AssistantEngine import AssistantEngine
 
 assistant_engine = AssistantEngine()
@@ -20,28 +22,27 @@ files = [r"C:\GitHub\Streamlit Gen\documentation\Streamlit_App_Generation_Guide.
          ]
 assistant = assistant_engine.create_assistant(
     name="Streamlit_Design_Tools_Analysis",
-    instructions="You're an expert in documentation and code for a Python module. You are"
-                 "provided 3 files; First, a markdown file with the documentation. "
-                 "Use the MD file for how-to, documentation related questions. "
-                 "Second, the main .py file containing the code. Third, a YAML"
-                 " file containing an example configuration that the .py file "
-                 "processes to create a Streamlit app.",
-    tools=["retrieval"],
-    files=files
+    instructions="You're an expert in Python.",
+    tools=["code_interpreter"]
 )
 
 # 2. Create a Thread
 thread = assistant_engine.create_thread()
 
 # 3. Add Messages to the Thread
-prompt = ("create a small .yaml file for me with a configuration example based "
-          "using the documenation to guide how it's created.")
+prompt = ("simple interest.")
 message = assistant_engine.create_message(prompt)
 
 # 4. Run the Assistant on the Thread to trigger responses
-run = assistant_engine.create_run()  # thread.id, assistant.id
+response = assistant_engine.get_response(stream=True)  # thread.id, assistant.id
+for value in response:
+    print(value, end="", flush=True)
+# for value in response_stream:
+#     print(value, end="", flush=True)
+
 # Check the run status (https://platform.openai.com/docs/assistants/how-it-works/run-lifecycle)
-assistant_engine.check_run_status(run_object=run, continuous=True)
+# Only necessary if not streaming
+assistant_engine.check_run_status(run_object=response, continuous=True)
 # If Run is stuck or taking too long:
 # assistant_engine.cancel_run(run_object=run)
 
@@ -52,12 +53,14 @@ assistant_engine.check_run_status(run_object=run, continuous=True)
 # Process the thread messages
 messages_response = assistant_engine.process_thread_messages(
     thread.id,
-    print_content=True,
-    order='asc',
-    role='assistant'
+    print_content=False,
+    order='desc',  # Latest message first (index 0)
+    role='assistant',
+    index=0
 )
+
 print("#" * 50)
-print(messages_response[0]['text'])
+print(messages_response)
 for citation in messages_response[0]['citations']:
     print(citation['index'], citation['quote'], citation['source'], '\n\n')
 
@@ -69,12 +72,14 @@ for message in messages_response:
         print(list(message['files']))
 
 # Extract code from the text value
-# pattern = r"```python\n(.*?)```"
-# code_snippet = re.findall(pattern, messages_response['text'], re.DOTALL)
-
-# assumes the assistant returned file information in its response
+pattern = r"```python\n(.*?)```"
+code_snippet = re.findall(pattern, messages_response[1]['text'], re.DOTALL)
+print(code_snippet[0])
+# assumes the assistant returned file information in the
+# 'extracted_response' dictionary (also stored in the processed_messages class var)
 assistant_engine.download_files(
-    messages_response  # None to download all files
+    messages_response,
+    file_names=None  # None to download all files
 )
 assistant_engine.download_file('test_file.yaml', 'file-ERvp11Cmo0EBSQuQyclqz8a5')
 ###################################
