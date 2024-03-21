@@ -212,11 +212,26 @@ class AssistantEngine:
         #  class vars upon instantiation. For now, check for asst id is commented out,
         #  so an existing asst id can be passed.
         if thread_id in self.threads:  # and assistant_id in self.assistants_id_to_name
-            run = self.client.beta.threads.runs.create(
-                thread_id=thread_id, assistant_id=assistant_id
+            stream = self.client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                stream=True
             )
-            self.runs[run.id] = run
-            return run
+
+            full_text = ""
+            # Loop through each event in the stream
+            for event in stream:
+                # Check if the event is a ThreadMessageDelta
+                if event.event == 'thread.message.delta':
+                    # Access the content list within the delta
+                    for content_block in event.data.delta.content:
+                        # Check if the content block is of type 'text'
+                        if content_block.type == 'text':
+                            # Extract the 'value' and concatenate it to the full_text string
+                            full_text += content_block.text.value or ''
+                            print(content_block.text.value, end="", flush=True)
+            print(f"\n\n###### FULL TEXT ###### \n\n {full_text}")
+
         else:
             raise ValueError("Invalid thread or assistant ID.")
 

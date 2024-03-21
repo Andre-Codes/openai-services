@@ -14,9 +14,10 @@ assistant_engine.get_assistants()
 # used to view the thread of messages and download any generated files
 
 # 1. Create an Assistant
-files = [r"C:\GitHub\Streamlit Gen\documentation\Streamlit_App_Generation_Guide.md",
-         r"C:\GitHub\Streamlit Gen\streamlit_app_gen\app_gen.py",
-         r"C:\GitHub\Streamlit Gen\streamlit_app_gen\config\config_main_adv_refs.yaml"]
+files = [r"C:\GitHub\Streamlit Gen\documentation\Streamlit_App_Generation_Guide.md"
+         #r"C:\GitHub\Streamlit Gen\streamlit_app_gen\app_gen.py",
+         #r"C:\GitHub\Streamlit Gen\streamlit_app_gen\config\config_main_adv_refs.yaml"
+         ]
 assistant = assistant_engine.create_assistant(
     name="Streamlit_Design_Tools_Analysis",
     instructions="You're an expert in documentation and code for a Python module. You are"
@@ -33,18 +34,16 @@ assistant = assistant_engine.create_assistant(
 thread = assistant_engine.create_thread()
 
 # 3. Add Messages to the Thread
-prompt = ("what exactly is the 'instances' key used for")
+prompt = ("create a small .yaml file for me with a configuration example based "
+          "using the documenation to guide how it's created.")
 message = assistant_engine.create_message(prompt)
 
 # 4. Run the Assistant on the Thread to trigger responses
-run = assistant_engine.create_run(assistant_id='asst_vfEmjaty11gvAfNcnTSQdfCn')  # thread.id, assistant.id
+run = assistant_engine.create_run()  # thread.id, assistant.id
 # Check the run status (https://platform.openai.com/docs/assistants/how-it-works/run-lifecycle)
 assistant_engine.check_run_status(run_object=run, continuous=True)
 # If Run is stuck or taking too long:
 # assistant_engine.cancel_run(run_object=run)
-
-###################################
-###################################
 
 ###################################
 # PROCESS MESSAGES AND FILES
@@ -77,7 +76,7 @@ for message in messages_response:
 assistant_engine.download_files(
     messages_response  # None to download all files
 )
-
+assistant_engine.download_file('test_file.yaml', 'file-ERvp11Cmo0EBSQuQyclqz8a5')
 ###################################
 ###################################
 
