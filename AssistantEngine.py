@@ -125,7 +125,8 @@ class AssistantEngine:
                         file_name, _ = self.process_file_info(cited_file_id, annot_idx, 'file_citation')
                         file_name_id_dict[file_name] = cited_file_id
                         if current_citation_value != last_citation_value:
-                            file_citations_list.append({'index': annot_idx, 'quote': file_citation.quote, 'source': file_name})
+                            file_citations_list.append(
+                                {'index': annot_idx, 'quote': file_citation.quote, 'source': file_name})
                         else:
                             footnote_index -= 1
                             print(f"current: {current_citation_value} == last: {last_citation_value}")
@@ -207,7 +208,10 @@ class AssistantEngine:
             list(self.assistants_id_to_name)[0] if assistant_id is None else assistant_id
         )
 
-        if thread_id in self.threads and assistant_id in self.assistants_id_to_name:
+        # TODO: store active threads and assistants from api into their appropriate
+        #  class vars upon instantiation. For now, check for asst id is commented out,
+        #  so an existing asst id can be passed.
+        if thread_id in self.threads:  # and assistant_id in self.assistants_id_to_name
             run = self.client.beta.threads.runs.create(
                 thread_id=thread_id, assistant_id=assistant_id
             )

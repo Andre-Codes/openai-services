@@ -14,12 +14,12 @@ assistant_engine.get_assistants()
 # used to view the thread of messages and download any generated files
 
 # 1. Create an Assistant
-files = [r"C:\Users\havok\GitHub\Streamlit Gen\Streamlit_App_Generation_Guide.md",
-         r"C:\Users\havok\GitHub\Streamlit Gen\streamlit_app_gen\app_gen.py",
-         r"C:\Users\havok\GitHub\Streamlit Gen\streamlit_app_gen\config\config_main_adv_refs.yaml"]
+files = [r"C:\GitHub\Streamlit Gen\documentation\Streamlit_App_Generation_Guide.md",
+         r"C:\GitHub\Streamlit Gen\streamlit_app_gen\app_gen.py",
+         r"C:\GitHub\Streamlit Gen\streamlit_app_gen\config\config_main_adv_refs.yaml"]
 assistant = assistant_engine.create_assistant(
-    name="Streanlit_Design_Tools_Analysis",
-    instructions="You're an expert in documentation for a Python module. You are"
+    name="Streamlit_Design_Tools_Analysis",
+    instructions="You're an expert in documentation and code for a Python module. You are"
                  "provided 3 files; First, a markdown file with the documentation. "
                  "Use the MD file for how-to, documentation related questions. "
                  "Second, the main .py file containing the code. Third, a YAML"
@@ -33,12 +33,11 @@ assistant = assistant_engine.create_assistant(
 thread = assistant_engine.create_thread()
 
 # 3. Add Messages to the Thread
-prompt = "can you show more of the relevant code for how a session tag, for example, " \
-         "is processed?"
+prompt = ("what exactly is the 'instances' key used for")
 message = assistant_engine.create_message(prompt)
 
 # 4. Run the Assistant on the Thread to trigger responses
-run = assistant_engine.create_run()  # thread.id, assistant.id
+run = assistant_engine.create_run(assistant_id='asst_vfEmjaty11gvAfNcnTSQdfCn')  # thread.id, assistant.id
 # Check the run status (https://platform.openai.com/docs/assistants/how-it-works/run-lifecycle)
 assistant_engine.check_run_status(run_object=run, continuous=True)
 # If Run is stuck or taking too long:
@@ -83,7 +82,7 @@ assistant_engine.download_files(
 ###################################
 
 # Delete all assistants created in this instance
-assistant_engine.delete_assistants(specific_id='asst_zCsN3ZFzYNDxhEowB2QXUxuc')
+assistant_engine.delete_assistants()
 
 # Delete all uploaded files
 for file in assistant_engine.client.files.list().data:
