@@ -1,10 +1,11 @@
 import base64
 import logging
 import os
-import openai
-from openai import OpenAI
 import re
+
+import openai
 import yaml
+from openai import OpenAI
 from typing import Iterator
 
 
@@ -86,6 +87,9 @@ class ChatEngine:
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
         if not enable_logging:
             logging.disable(logging.CRITICAL)
+
+        # attribute set when the API called is made (text, image, vision)
+        self.api_used = None
 
         if config_path:
             with open(config_path, "r") as f:
@@ -200,7 +204,7 @@ class ChatEngine:
             text_prompt (str | list): The input text or list of texts to serve as a basis for the OpenAI API response.
 
         Keyword Arguments:
-            streaming (bool, optional): If set to True, the response is streamed. Default is False.
+            stream (bool, optional): If set to True, the response is streamed. Default is False.
             format_style (str, optional): The desired format style in which the AI responds (e.g., 'markdown').
                 Not to be confused with `response_format` which determines the format in which the API sends the data.
 
@@ -216,7 +220,6 @@ class ChatEngine:
         logging.info("Initiating text API call.")
 
         # Check for streaming and format_style in kwargs
-        self.stream = kwargs.get('streaming', self.stream)
         format_style = kwargs.get('format_style', 'text')
 
         self._handle_format_instructions(format_style=format_style, prompt=text_prompt)
@@ -224,6 +227,8 @@ class ChatEngine:
 
         response_format = {"type": "json_object" if format_style.lower() == 'json' else 'text'}
 
+        # Get additional kwargs for API call
+        self.stream = kwargs.get('stream', self.stream)
         try:
             client = OpenAI()
             response = client.chat.completions.create(
@@ -295,12 +300,16 @@ class ChatEngine:
         # Build messages for vision API
         self._build_messages(prompt=self.complete_prompt, response_type='vision', image_prompts=processed_prompts)
         # logging.info(f"Formatted 'messages' param: {self.__messages}")
+
+        # Get additional kwargs for API call
+        self.stream = kwargs.get('stream', self.stream)
         try:
             client = OpenAI()
             response = client.chat.completions.create(
                 model="gpt-4-vision-preview",
                 messages=self.__messages,
                 max_tokens=700,
+                stream=self.stream
             )
             if response:
                 self.response = response
@@ -530,37 +539,56 @@ class ChatEngine:
         """
         Infers the response type based on the content and format of the prompt.
         """
-        if isinstance(prompt, list):
+        response_type: str = 'text'
+
+        # Assume a list of AI/user messages and work with only the last item.
+        # This ensures that only the last item will be treated as the most recent.
+        # Necessary for vision and image API to understand.
+        last_item = prompt[-1] if isinstance(prompt, list) else prompt
+        if isinstance(last_item, list):
             # If the prompt is a list, check each item
-            if all(isinstance(item, str) and (self._prompt_is_url(item) or self._prompt_is_base64_image(item) or os.path.isfile(item)) for item in prompt):
+            if all(isinstance(item, str) and
+                   (self._prompt_is_url(item) or
+                    self._prompt_is_base64_image(item) or
+                    os.path.isfile(item)) for item in last_item):
                 logging.info("Prompt is a list suitable for the vision API.")
-                return 'vision'
+                response_type = 'vision'
+                prompt = last_item
             else:
                 logging.info("Prompt is a list suitable for the text API.")
-                return 'text'
-        elif isinstance(prompt, str):
+                response_type = 'text'
+
+        elif isinstance(last_item, str):
             # Check for URL, base64 encoded image, or file path indicative of the vision API
-            if self._prompt_is_url(prompt) or self._prompt_is_base64_image(prompt) or os.path.isfile(prompt):
+            if (self._prompt_is_url(last_item) or
+                    self._prompt_is_base64_image(last_item) or
+                    os.path.isfile(last_item)):
                 logging.info("Prompt is a string suitable for the vision API.")
-                return 'vision'
+                response_type = 'vision'
+                prompt = last_item
             # Check for keywords indicative of the image API
-            elif self._prompt_suggests_image(prompt):
+            elif self._prompt_suggests_image(last_item):
                 logging.info("Prompt suggests an image generation request.")
-                return 'image'
+                response_type = 'image'
+                prompt = last_item
             else:
                 logging.info("Prompt is a string suitable for the text API.")
-                return 'text'
+                response_type = 'text'
         else:
             # Default to text if the prompt type is unexpected
             logging.warning("Prompt type is unexpected. Defaulting to text API.")
-            return 'text'
+
+        return response_type, prompt
 
     @staticmethod
     def _prompt_is_url(string):
         """
         Checks if the string is a URL.
         """
-        return re.match(r'https?://', string) is not None
+        pattern = r'https?://[^\s]+'
+        if re.search(pattern, string):
+            return True
+        return False
 
     @staticmethod
     def _prompt_is_base64_image(string):
@@ -683,8 +711,8 @@ class ChatEngine:
 
         return data
 
-    def get_response(self, response_type: str = None,
-                     prompt: str | list = None,
+    def get_response(self, prompt: str | list = None,
+                     response_type: str = None,
                      raw_output: bool = False, **kwargs) -> str | dict | tuple | list | Iterator:
         """
         Retrieves a response from the OpenAI API based on the specified parameters. This is the main
@@ -696,13 +724,13 @@ class ChatEngine:
         Parameters:
             response_type (str): The type of response to generate; options include 'text', 'image', or 'vision'.
                                  Determines the OpenAI API endpoint to use. Defaults to 'text'.
-            prompt (str | list): The input prompt or a list of prompts for the OpenAI API.
+            prompt (str | list): The user prompt or a list of prompts representing user/assistant dialogue.
             raw_output (bool): Determines whether to return the raw API response or a processed result.
                                Defaults to True for raw JSON output.
 
         Keyword Arguments:
             Keyword arguments specific to each response type are forwarded to the respective internal methods.
-            For 'text' and 'vision': these may include 'streaming', 'format_style', 'text_prompt', etc.
+            For 'text' and 'vision': these may include 'stream', 'format_style', 'text_prompt', etc.
             For 'image': these may include 'image_model', 'image_count', 'image_size', 'image_quality', etc.
 
         Returns:
@@ -718,7 +746,7 @@ class ChatEngine:
 
         # Automatically determine response type if not provided
         if not response_type:
-            response_type = self._infer_response_type(prompt)
+            response_type, prompt = self._infer_response_type(prompt)
 
         logging.info(f"Getting response: type={response_type}")
 
@@ -734,15 +762,18 @@ class ChatEngine:
 
         # Call the appropriate API based on response_type
         if response_type == 'text':
+            self.api_used = 'text'
             self._text_api_call(text_prompt=prompt, **kwargs)
         elif response_type == 'image':
+            self.api_used = 'image'
+            self.stream = False
             self._image_api_call(text_prompt=prompt, **kwargs)
         elif response_type == 'vision':
+            self.api_used = 'vision'
             self._vision_api_call(image_prompt=prompt, **kwargs)
 
         # Return finished response from OpenAI
         if not raw_output and not self.stream:  # if raw and stream are False
             return self.extract_response(response_type, **kwargs)
 
-        print(self.response)
         return self.response
