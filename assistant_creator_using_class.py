@@ -21,21 +21,33 @@ files = [r"C:\GitHub\Streamlit Gen\documentation\Streamlit_App_Generation_Guide.
          #r"C:\GitHub\Streamlit Gen\streamlit_app_gen\config\config_main_adv_refs.yaml"
          ]
 assistant = assistant_engine.create_assistant(
-    name="Streamlit_Design_Tools_Analysis",
-    instructions="You're an expert in Python.",
-    tools=["code_interpreter"]
+    name="GuideAnalysis",
+    instructions="You're an expert in Python and understanding documentation.",
+    tools=["code_interpreter"],
+    files=files
 )
 
 # 2. Create a Thread
 thread = assistant_engine.create_thread()
 
 # 3. Add Messages to the Thread
-prompt = ("simple interest.")
+prompt = ("Using the markdown documentation, briefly define the 'ui' key")
 message = assistant_engine.create_message(prompt)
 
 # 4. Run the Assistant on the Thread to trigger responses
-response = assistant_engine.get_response(stream=True)  # thread.id, assistant.id
-for value in response:
+# response = assistant_engine.get_response(stream=True)  # thread.id, assistant.id
+
+response = assistant_engine.get_response(
+    stream=True,
+    print_content=False,
+    order='desc',  # Latest message first (index 0)
+    role='assistant',
+    index=0
+)
+print(response)
+assistant_engine.stream_text_response(None, response=response)
+
+for value in assistant_engine.stream_text_response(response):
     print(value, end="", flush=True)
 # for value in response_stream:
 #     print(value, end="", flush=True)
@@ -86,7 +98,7 @@ assistant_engine.download_file('test_file.yaml', 'file-ERvp11Cmo0EBSQuQyclqz8a5'
 ###################################
 
 # Delete all assistants created in this instance
-assistant_engine.delete_assistants()
+assistant_engine.delete_assistants(specific_id='asst_EPxTqq7g9OY6aP3XUIyOKDoc')
 
 # Delete all uploaded files
 for file in assistant_engine.client.files.list().data:

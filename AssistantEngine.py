@@ -9,18 +9,42 @@ import openai
 
 class AssistantEngine:
     def __init__(self, api_key=os.environ["OPENAI_API_KEY"], model="gpt-4-1106-preview"):
+        """
+            Initializes the AssistantEngine with an API key and a model specification.
+
+            Args:
+                api_key (str): The API key for authentication, fetched from environment variables.
+                model (str): The model name to be used with OpenAI services, default is "gpt-4-1106-preview".
+        """
         openai.api_key = api_key
         self.client = openai.OpenAI(api_key=api_key)
         self.model = model
         self.threads = {}  # Store threads created
         self.assistants = {}
-        self.assistants_id_to_name = {}
+        self.assistant_dict = {
+            assistant.id: assistant.name for assistant in self.get_assistants().data
+        }
         self.threads = {}
         self.runs = {}
         self.processed_messages = []
 
     def create_assistant(self, name, instructions, files=None, **kwargs):
+        """
+        Creates a new assistant with specified name and instructions, optionally adding files.
 
+        Args:
+            name (str): The name of the assistant to be created.
+            instructions (str): Instructions for the assistant's operation.
+            files (list, optional): List of file paths to be attached to the assistant.
+            **kwargs: Additional keyword arguments that might include 'tools' and settings for assistant customization.
+
+        Returns:
+            object: The created assistant object.
+
+        Raises:
+            TypeError: If the 'tools' or 'files' parameters are not provided in the correct format.
+            UserWarning: If the 'retrieval' tool is specified without corresponding files.
+        """
         if files is not None:
             if not isinstance(kwargs['tools'], list):
                 raise TypeError("The 'files' parameter must be a list.")
@@ -43,10 +67,23 @@ class AssistantEngine:
         # Call the create method with name, instructions, and other parameters
         assistant = self.client.beta.assistants.create(name=name, instructions=instructions, **kwargs)
         self.assistants[name] = assistant
-        self.assistants_id_to_name[assistant.id] = name
+        self.assistant_dict[assistant.id] = name
         return assistant
 
     def create_file(self, files, key=None):
+        """
+        Processes and uploads files to be used with assistants, returning their identifiers.
+
+        Args:
+            files (list of str): List of file paths to upload.
+            key (str, optional): Specific key to extract from the file object's response.
+
+        Returns:
+            list: List of file identifiers or objects, depending on the 'key' argument.
+
+        Raises:
+            ValueError: If any file exceeds the allowed size or if too many files are provided.
+        """
         MAX_FILES = 20
         MAX_SIZE_MB = 512
         MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024
@@ -74,12 +111,30 @@ class AssistantEngine:
         return [process_single_file(path) for path in files]
 
     def create_thread(self):
+        """
+        Creates a new communication thread for message exchange.
+
+        Returns:
+            object: The newly created thread object.
+        """
         thread = self.client.beta.threads.create()
         self.threads[thread.id] = thread
         return thread
 
     def create_message(self, content, thread_id=None):
+        """
+        Creates a message in a specified thread.
 
+        Args:
+            content (str): Content of the message to be created.
+            thread_id (str, optional): Identifier of the thread where the message will be posted. Uses the most recent thread if not specified.
+
+        Returns:
+            object: The created message object.
+
+        Raises:
+            ValueError: If the specified thread ID is not found.
+        """
         thread_id = list(self.threads)[0] if thread_id is None else thread_id
         if thread_id in self.threads:
             return self.client.beta.threads.messages.create(
@@ -89,6 +144,17 @@ class AssistantEngine:
             raise ValueError("Thread ID not found.")
 
     def get_messages(self, thread_id=None, order='asc', **kwargs):
+        """
+        Retrieves messages from a specified thread, optionally ordered.
+
+        Args:
+            thread_id (str, optional): The thread ID from which messages are to be retrieved. Defaults to the most recent thread.
+            order (str, optional): Order of the messages ('asc' or 'desc'). Default is 'asc'.
+            **kwargs: Additional keyword arguments for message retrieval options.
+
+        Returns:
+            list: A list of message objects retrieved from the specified thread.
+        """
         order = kwargs.get('order', order)
         thread_id = list(self.threads)[0] if thread_id is None else thread_id
         return self.client.beta.threads.messages.list(
@@ -96,7 +162,18 @@ class AssistantEngine:
             order=order
         )
 
-    def parse_message_object(self, message, print_content=True, **kwargs):
+    def parse_message_object(self, message, print_content=False, **kwargs):
+        """
+        Parses and processes a message object, optionally printing its content.
+
+        Args:
+            message (object): The message object to parse.
+            print_content (bool, optional): Flag to indicate whether to print the message content.
+            **kwargs: Additional keyword arguments used for message parsing.
+
+        Returns:
+            dict: A dictionary containing parsed text, citations, and file information from the message.
+        """
         print(f"{'#' * 40}\n{'#' * 40}")
         print(f"Message ID: {message.id}, "
               f"Role: {message.role}, "
@@ -162,7 +239,7 @@ class AssistantEngine:
 
     def process_file_info(self, file_id, identifier, file_type):
         """
-        Helper function to pass the appropriate message object to `process_thread_messages()`
+        Helper function to retrieve and parse file objects
         """
         file_info = self.client.files.retrieve(file_id)
         full_filename = Path(file_info.filename).name
@@ -173,7 +250,7 @@ class AssistantEngine:
         return full_filename, file_name_edit
 
     def process_thread_messages(self, thread_id, message_id=None,
-                                index=None, role=None, **kwargs) -> list | dict:
+                                index=None, role=None, **kwargs) -> list[dict] | dict:
         """
         Processes messages within a specified thread, optionally filtering by message ID,
         index, role, or other criteria provided via `kwargs`.
@@ -204,8 +281,14 @@ class AssistantEngine:
         if thread_id not in self.threads:
             raise ValueError("Thread ID not found.")
 
+        index = kwargs.get('index', index)
+        role = kwargs.get('role', role)
+        order = kwargs.get('order', 'asc')
+
         # Process all message in the active thread
-        message_objects = self.get_messages(thread_id, **kwargs).data
+        message_objects = self.get_messages(
+            thread_id, order=order
+        ).data
 
         # Filter messages for specified role
         if role:
@@ -234,7 +317,16 @@ class AssistantEngine:
 
         return response
 
-    def stream_text_response(self, response):
+    @staticmethod
+    def stream_text_response(response):
+        """
+
+        Args:
+            response:
+                Streaming object
+        Returns:
+            Generator for the stream containing only the text values
+        """
         for event in response:
             # Check if the event is a ThreadMessageDelta
             if event.event == 'thread.message.delta':
@@ -242,41 +334,45 @@ class AssistantEngine:
                     if content_block.type == 'text':
                         yield content_block.text.value
 
-    def get_response(self, thread_id=None, assistant_id=None, stream=False):
+    def get_response(self, thread_id=None, assistant_id=None, stream=False, **kwargs) -> list[dict] | dict | openai.Stream:
         """
-        Creates a 'run' and returns the run object or a stream of the message
-        response if `stream=True`
+        Creates a 'run' and then returns a stream of the message
+        response if `stream=True`, or the extracted content of a non-streamed
+        response using `process_thread_messages() `if `stream=False`.
 
         Args:
-            thread_id:
-            assistant_id:
-            stream:
+            thread_id: Optional; the ID of the thread. If `None` the most recently
+            created `thread` is used.
+            assistant_id: Optional; the ID of the assistant. If `None` the most recently
+            created `assistant` is used.
+            stream: If True, returns a stream of message responses; otherwise returns processed messages.
+            **kwargs: Arbitrary keyword arguments passed along to further methods.
 
         Returns:
-
+            A stream of responses or processed message content depending on the 'stream' parameter.
         """
         thread_id = (
             list(self.threads)[0] if thread_id is None else thread_id
         )
         assistant_id = (
-            list(self.assistants_id_to_name)[0] if assistant_id is None else assistant_id
+            list(self.assistant_dict)[0] if assistant_id is None else assistant_id
         )
 
-        # TODO: store active threads and assistants from api into their appropriate
+        # TODO: store active threads (no 'list threads' func from API)
+        #  and assistants from api into their appropriate
         #  class vars upon instantiation. For now, check for asst id is commented out,
         #  so an existing asst id can be passed.
-        if thread_id in self.threads:  # and assistant_id in self.assistants_id_to_name
+        if thread_id in self.threads:  # and assistant_id in self.assistant_dict
             response = self.client.beta.threads.runs.create(
                 thread_id=thread_id,
                 assistant_id=assistant_id,
                 stream=stream
             )
 
-            # Create iterator for stream of response text
             if stream:
-                return self.stream_text_response(response)
-            else:
                 return response
+            else:
+                return self.process_thread_messages(thread_id, **kwargs)
 
         else:
             raise ValueError("Invalid thread or assistant ID.")
@@ -344,7 +440,7 @@ class AssistantEngine:
             self.delete_assistants(self.client, self.assistants[name].id)
             del self.assistants[name]
 
-    def delete_assistants(self, specific_id=None):
+    def delete_assistants(self, specific_id):
         assistants = self.get_assistants()
         for assistant in assistants.data:
             if specific_id is None or assistant.id == specific_id:
@@ -354,8 +450,8 @@ class AssistantEngine:
                     f"({assistant.name})"
                 )
                 # Remove from assistant dict
-                if assistant.id in self.assistants_id_to_name:
-                    del self.assistants_id_to_name[assistant.id]
+                if assistant.id in self.assistant_dict:
+                    del self.assistant_dict[assistant.id]
 
                 if specific_id is not None:
                     break  # Stop after deleting the specific assistant
