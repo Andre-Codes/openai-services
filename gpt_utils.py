@@ -2,6 +2,7 @@ import base64
 import logging
 import os
 import re
+import threading
 
 import openai
 import yaml
@@ -51,6 +52,9 @@ class ChatEngine:
 
             },
             'gpt-4-1106-preview': {
+
+            },
+            'gpt-4-turbo': {
 
             }
         }
@@ -306,7 +310,7 @@ class ChatEngine:
         try:
             client = OpenAI()
             response = client.chat.completions.create(
-                model="gpt-4-vision-preview",
+                model="gpt-4-turbo",
                 messages=self.__messages,
                 max_tokens=700,
                 stream=self.stream
@@ -710,6 +714,27 @@ class ChatEngine:
             return list(zip(data, revised_prompts))
 
         return data
+
+    def get_response_parallel(self, prompts: list, response_type='text', raw_output=False, **kwargs) -> dict:
+        results = {}
+        threads = []
+        lock = threading.Lock()
+
+        def thread_function(current_prompt, response_type, raw_output, **kwargs):
+            result = self.get_response(current_prompt, response_type, raw_output, **kwargs)
+            print(result)
+            with lock:
+                results[current_prompt] = result
+
+        for prompt in prompts:
+            thread = threading.Thread(target=thread_function, args=(prompt, response_type, raw_output), kwargs=kwargs)
+            threads.append(thread)
+            thread.start()
+
+        for thread in threads:
+            thread.join()
+
+        return results
 
     def get_response(self, prompt: str | list = None,
                      response_type: str = None,
