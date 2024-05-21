@@ -70,6 +70,13 @@ class AssistantEngine:
         self.assistant_dict[assistant.id] = name
         return assistant
 
+    def create_vector_store(self, name, files):
+        vector_store = self.client.beta.vector_stores.create(name=name)
+        file_ids = [self.create_file([file], key='id')[0] for file in files]
+        file_batch = self.client.beta.vector_stores.file_batches.create_and_poll(vector_store_id=vector_store.id,
+                                                                                 file_ids=file_ids)
+        return vector_store.id
+
     def create_file(self, files, key=None):
         """
         Processes and uploads files to be used with assistants, returning their identifiers.

@@ -56,6 +56,9 @@ class ChatEngine:
             },
             'gpt-4-turbo': {
 
+            },
+            'gpt-4o': {
+
             }
         }
     }
@@ -235,6 +238,7 @@ class ChatEngine:
         self.stream = kwargs.get('stream', self.stream)
         try:
             client = OpenAI()
+            # noinspection PyTypeChecker
             response = client.chat.completions.create(
                 model=self.model,
                 messages=self.__messages,
@@ -309,6 +313,7 @@ class ChatEngine:
         self.stream = kwargs.get('stream', self.stream)
         try:
             client = OpenAI()
+            # noinspection PyTypeChecker
             response = client.chat.completions.create(
                 model="gpt-4-turbo",
                 messages=self.__messages,
@@ -382,6 +387,11 @@ class ChatEngine:
         """
         logging.info("Initiating image API call.")
 
+        # If text_prompt is a list (assuming self.__messages) isolate prompt
+        #  without message history. For image prompt length requirements.
+        if isinstance(text_prompt, list):
+            text_prompt = text_prompt[-1]
+
         # get the adjusted prompt reconstructed with any custom instructions
         text_prompt = self._handle_role_instructions(text_prompt)
 
@@ -424,6 +434,7 @@ class ChatEngine:
             preface = ''
         try:
             client = OpenAI()
+            # noinspection PyTypeChecker
             response = client.images.generate(
                 model=model,
                 prompt=preface + text_prompt,
@@ -497,6 +508,8 @@ class ChatEngine:
                 user_assistant_msgs = [{"role": "user", "content": self.complete_prompt}]
 
             # Combine system, user, and assistant messages
+            # TODO: make __messages a list and append to save history
+            #  and remove __
             self.__messages = system_msg + user_assistant_msgs
 
     def _handle_role_instructions(self, prompt):
