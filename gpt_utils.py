@@ -59,7 +59,9 @@ class ChatEngine:
             },
             'gpt-4o': {
 
-            }
+            },
+            'o1-preview': {},
+            'o1-mini': {}
         }
     }
 
@@ -106,6 +108,9 @@ class ChatEngine:
 
         # Set system role
         self.system_role = system_role or "You're a helpful assistant who answers questions."
+
+        # Initialize messages and apply system role
+        self.messages: list = [{"role": "system", "content": self.system_role}]
 
         # Set up API access key
         OpenAI.api_key = api_key
@@ -241,7 +246,7 @@ class ChatEngine:
             # noinspection PyTypeChecker
             response = client.chat.completions.create(
                 model=self.model,
-                messages=self.__messages,
+                messages=self.messages,
                 temperature=self.temperature,
                 top_p=0.2,
                 stream=self.stream,
@@ -307,7 +312,7 @@ class ChatEngine:
 
         # Build messages for vision API
         self._build_messages(prompt=self.complete_prompt, response_type='vision', image_prompts=processed_prompts)
-        # logging.info(f"Formatted 'messages' param: {self.__messages}")
+        # logging.info(f"Formatted 'messages' param: {self.messages}")
 
         # Get additional kwargs for API call
         self.stream = kwargs.get('stream', self.stream)
@@ -316,7 +321,7 @@ class ChatEngine:
             # noinspection PyTypeChecker
             response = client.chat.completions.create(
                 model="gpt-4-turbo",
-                messages=self.__messages,
+                messages=self.messages,
                 max_tokens=700,
                 stream=self.stream
             )
@@ -387,7 +392,7 @@ class ChatEngine:
         """
         logging.info("Initiating image API call.")
 
-        # If text_prompt is a list (assuming self.__messages) isolate prompt
+        # If text_prompt is a list (assuming list of message history) isolate prompt
         #  without message history. For image prompt length requirements.
         if isinstance(text_prompt, list):
             text_prompt = text_prompt[-1]
@@ -474,7 +479,7 @@ class ChatEngine:
             system_role (str, optional): The role of the system in the conversation, influencing the message structure.
             Other keyword arguments may be relevant for specific response types and are handled accordingly.
 
-        This method updates `self.__messages` with the appropriately structured messages for the API call.
+        This method updates `self.messages` with the appropriately structured messages for the API call.
         """
 
         if response_type == 'vision':
@@ -485,19 +490,15 @@ class ChatEngine:
 
             vision_msgs = [{"type": "image_url", "image_url": {"url": url}} for url in image_prompts]
             user_msg = {"role": "user", "content": [{"type": "text", "text": prompt}] + vision_msgs}
-            self.__messages = [user_msg]
+            self.messages.append(user_msg)
         else:
             # Existing logic for text messages
             if not all(isinstance(item, str) for item in prompt):
                 raise ValueError(f"All elements in the list should be strings {prompt}")
-            # Initialize system message
-            if 'system_role' in kwargs:
-                self.system_role = kwargs['system_role']
-            system_msg = [{"role": "system", "content": self.system_role}]
 
             # Determine user and assistant messages based on the length of the 'prompt'
             if isinstance(prompt, list) and len(prompt) > 1:
-                user_assistant_msgs = [
+                user_msg = [
                     {
                         "role": "assistant" if i % 2 else "user",
                         "content": prompt[i]
@@ -505,12 +506,10 @@ class ChatEngine:
                     for i in range(len(prompt))
                 ]
             else:
-                user_assistant_msgs = [{"role": "user", "content": self.complete_prompt}]
+                user_msg = [{"role": "user", "content": self.complete_prompt}]
 
             # Combine system, user, and assistant messages
-            # TODO: make __messages a list and append to save history
-            #  and remove __
-            self.__messages = system_msg + user_assistant_msgs
+            self.messages.append(user_msg)
 
     def _handle_role_instructions(self, prompt):
         """
@@ -751,7 +750,7 @@ class ChatEngine:
 
     def get_response(self, prompt: str | list = None,
                      response_type: str = None,
-                     raw_output: bool = False, **kwargs) -> str | dict | tuple | list | Iterator:
+                     raw_output: bool = False, system_role: str = None, **kwargs) -> str | dict | tuple | list | Iterator:
         """
         Retrieves a response from the OpenAI API based on the specified parameters. This is the main
         method to interact with different OpenAI API functionalities like text, image, and vision responses.
@@ -765,6 +764,7 @@ class ChatEngine:
             prompt (str | list): The user prompt or a list of prompts representing user/assistant dialogue.
             raw_output (bool): Determines whether to return the raw API response or a processed result.
                                Defaults to True for raw JSON output.
+            system_role:
 
         Keyword Arguments:
             Keyword arguments specific to each response type are forwarded to the respective internal methods.
@@ -781,6 +781,15 @@ class ChatEngine:
         Usage Example:
             get_response(response_type='text', prompt='Tell me a joke.', raw_output=False)
         """
+
+        # Override system_role if provided
+        if system_role:
+            # Update the system message in self.messages
+            if self.messages and self.messages[0]['role'] == 'system':
+                self.messages[0]['content'] = system_role
+            else:
+                # If self.messages is empty or doesn't start with a system message, insert it
+                self.messages.insert(0, {"role": "system", "content": system_role})
 
         # Automatically determine response type if not provided
         if not response_type:
@@ -812,6 +821,7 @@ class ChatEngine:
 
         # Return finished response from OpenAI
         if not raw_output and not self.stream:  # if raw and stream are False
-            return self.extract_response(response_type, **kwargs)
-
-        return self.response
+            response = self.extract_response(response_type, **kwargs)
+            self.messages.append({"role": "assistant", "content": response})
+        else:
+            return self.response
