@@ -330,7 +330,7 @@ class ChatEngine:
             logging.error(f"OpenAI API error during text call: {e}")
             raise
 
-    def _vision_api_call(self, image_prompt, **kwargs):
+    def _vision_api_call(self, text_prompt, image_prompt, stream: bool = None, top_p: float = None, **kwargs):
         """
         Makes an API call for vision-based responses using the specified image prompt and additional parameters.
 
@@ -340,6 +340,7 @@ class ChatEngine:
 
         Parameters:
             image_prompt (str | list): A URL or a list of URLs pointing to the images to be processed.
+            text_prompt (str): The text prompt to be used in conjunction with the image.
 
         Keyword Arguments:
             text_prompt (str, optional): An additional text prompt to accompany the image in the API call.
@@ -353,6 +354,8 @@ class ChatEngine:
         This method updates `self.response` with the response from the OpenAI API call.
         """
         logging.info("Initiating vision API call.")
+
+        use_stream = stream if stream is not None else self.stream
 
         processed_prompts = []
         if isinstance(image_prompt, list):
@@ -380,38 +383,40 @@ class ChatEngine:
 
         # Get text_prompt, if not found or found but value is None
         # default to standard message
-        text_prompt = kwargs.get('text_prompt', None)
         if text_prompt is None:
             text_prompt = "Describe the image(s)."
-        format_style = kwargs.get('format_style', None)
 
+        format_style = kwargs.get('format_style', None)
         # self._handle_format_instructions(format_style=format_style, prompt=text_prompt)
 
         # Build messages for vision API
         self._build_messages(prompt=text_prompt, response_type='vision', image_prompts=processed_prompts)
         # logging.info(f"Formatted 'messages' param: {self.messages}")
 
-        # Get additional kwargs for API call
-        self.stream = kwargs.get('stream', self.stream)
-        try:
-            client = OpenAI()
-            # noinspection PyTypeChecker
-            response = client.chat.completions.create(
-                model="gpt-4-turbo",
-                messages=self.messages,
-                max_tokens=700,
-                stream=self.stream
-            )
-            if response:
-                self.response = response
-        except openai.APIConnectionError as e:
-            raise e
-        except openai.RateLimitError as e:
-            raise e
-        except openai.APIError as e:
-            raise e
+        # Prepare API call parameters
+        api_params = {
+            "model": self.model,
+            "messages": self.messages,
+            "temperature": self.temperature,
+            "top_p": top_p if top_p is not None else 1.0,
+            "stream": use_stream,
+        }
 
-        logging.info("Vision API call completed.")
+        # Update api_params with additional kwargs, ensuring no conflicts
+        allowed_kwargs = {'max_tokens', 'stop', 'presence_penalty', 'frequency_penalty'}
+        for key in allowed_kwargs:
+            if key in kwargs:
+                api_params[key] = kwargs[key]
+
+        try:
+            # Make the API call using the pre-initialized client
+            response = self.openai_client.chat.completions.create(**api_params)
+            self.response = response
+            logging.info("Vision API call successful.")
+            return response
+        except openai.OpenAIError as e:
+            logging.error(f"OpenAI API error during vision call: {e}")
+            raise
 
     @staticmethod
     def _validate_model_option(option_value, valid_options, option_name, model=None):
