@@ -84,6 +84,11 @@ class ChatEngine:
 
     BASE64_IMAGE_PATTERN = re.compile(r'^data:image/.+;base64,', re.IGNORECASE)
 
+    # Allowed kwargs for API calls
+    ALLOWED_TEXT_KWARGS = {'response_format', 'stream', 'top_p', 'max_tokens', 'stop', 'presence_penalty', 'frequency_penalty'}
+    ALLOWED_IMAGE_KWARGS = {'model', 'count', 'size', 'quality', 'style', 'response_format'}
+    ALLOWED_VISION_KWARGS = {'text_prompt', 'stream', 'top_p', 'max_tokens', 'stop', 'presence_penalty', 'frequency_penalty'}
+
     def __init__(self, role_context=None, system_role=None, temperature: float = 0.7,
                  model: str = "gpt-3.5-turbo", stream: bool = False, api_key: str = None,
                  config_path: str = None, enable_logging: bool = False):
@@ -124,6 +129,9 @@ class ChatEngine:
             logging.error("OpenAI API key must be provided either via parameter or environment variable.")
             raise ValueError("OpenAI API key must be provided either via parameter or environment variable.")
         openai.api_key = self.api_key  # Set the API key for OpenAI
+
+        # Initialize OpenAI client
+        self.openai_client = openai.OpenAI(api_key=self.api_key)
 
         # Turn off/on streaming of response
         self.stream = stream
@@ -250,32 +258,34 @@ class ChatEngine:
 
         logging.info(f"Finished adding custom formatting instructions to text prompt:\n{self.complete_prompt[:100]}...")
 
-    def _text_api_call(self, text_prompt, **kwargs):
+    def _text_api_call(self, text_prompt, stream: bool = None, top_p: float = None, **kwargs):
         """
         Makes an API call for text-based responses using the specified prompt and additional parameters.
 
-        This method constructs the message for the OpenAI API call by handling the provided text prompt
-        and applying any additional formatting or configuration specified in kwargs. It then makes the
-        API call using the OpenAI client and stores the response.
-
         Parameters:
             text_prompt (str | list): The input text or list of texts to serve as a basis for the OpenAI API response.
+            format_style (str, optional): The desired format style for the response (e.g., 'markdown', 'json').
+                                           Determines the response format from the API.
+            stream (bool, optional): If set to True, the response is streamed. Defaults to the instance's stream setting.
+            top_p (float, optional): Controls the diversity via nucleus sampling. Defaults to 1.0.
 
         Keyword Arguments:
-            stream (bool, optional): If set to True, the response is streamed. Default is False.
-            format_style (str, optional): The desired format style in which the AI responds (e.g., 'markdown').
-                Not to be confused with `response_format` which determines the format in which the API sends the data.
+            temperature (float, optional): Controls the randomness of the model's output.
+            max_tokens (int, optional): The maximum number of tokens to generate in the completion.
+            stop (str or list, optional): Up to 4 sequences where the API will stop generating further tokens.
+            presence_penalty (float, optional): Number between -2.0 and 2.0. Positive values penalize new tokens based on their presence.
+            frequency_penalty (float, optional): Number between -2.0 and 2.0. Positive values penalize new tokens based on their frequency.
 
-            Other keyword arguments may be passed and will be handled according to the OpenAI API requirements.
+        Returns:
+            Any: The response from the OpenAI API, either streamed or as a complete object.
 
         Raises:
-            openai.APIConnectionError: If there is an issue with the network connection.
-            openai.RateLimitError: If the rate limit for the API is reached.
-            openai.APIError: For other API-related errors.
-
-        This method updates `self.response` with the response from the OpenAI API call.
+            openai.OpenAIError: For any errors related to the OpenAI API.
         """
         logging.info("Initiating text API call.")
+
+        # Override stream if provided
+        use_stream = stream if stream is not None else self.stream
 
         # Check for streaming and format_style in kwargs
         format_style = kwargs.get('format_style', 'text')
@@ -283,29 +293,42 @@ class ChatEngine:
         self._handle_format_instructions(format_style=format_style, prompt=text_prompt)
         self._build_messages(prompt=text_prompt, **kwargs)
 
-        response_format = {"type": "json_object" if format_style.lower() == 'json' else 'text'}
+        response_format_mapping = {
+            'string': 'string',
+            'json': 'json_object',
+            'text': 'text'
+        }
+        response_format = kwargs.pop('response_format', 'auto').lower()
+        response_format = {"type": response_format_mapping.get(response_format, 'text')}
+        print("#########", response_format)
+        # Set top_p if provided, else default to 1.0
+        top_p_value = top_p if top_p is not None else 1.0
 
-        # Get additional kwargs for API call
-        self.stream = kwargs.get('stream', self.stream)
+        # Prepare API call parameters
+        api_params = {
+            "model": self.model,
+            "messages": self.messages,
+            "temperature": self.temperature,
+            "top_p": top_p_value,
+            "stream": use_stream,
+            "response_format": response_format
+        }
+
+        # Update api_params with additional kwargs, ensuring no conflicts
+        allowed_kwargs = {'max_tokens', 'stop', 'presence_penalty', 'frequency_penalty'}
+        for key in allowed_kwargs:
+            if key in kwargs:
+                api_params[key] = kwargs[key]
+
         try:
-            client = OpenAI()
-            # noinspection PyTypeChecker
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=self.messages,
-                temperature=self.temperature,
-                top_p=0.2,
-                stream=self.stream,
-                response_format=response_format
-            )
-            if response:
-                self.response = response
-        except openai.APIConnectionError as e:
-            raise e
-        except openai.RateLimitError as e:
-            raise e
-        except openai.APIError as e:
-            raise e
+            # Make the API call using the pre-initialized client
+            response = self.openai_client.chat.completions.create(**api_params)
+            self.response = response
+            logging.info("Text API call successful.")
+            return response
+        except openai.OpenAIError as e:
+            logging.error(f"OpenAI API error during text call: {e}")
+            raise
 
     def _vision_api_call(self, image_prompt, **kwargs):
         """
@@ -355,8 +378,11 @@ class ChatEngine:
             logging.error("Invalid type for image_prompt in vision API call.")
             return
 
-        # Get text_prompt and format_style if provided
-        text_prompt = kwargs.get('text_prompt', "Describe the image(s).")
+        # Get text_prompt, if not found or found but value is None
+        # default to standard message
+        text_prompt = kwargs.get('text_prompt', None)
+        if text_prompt is None:
+            text_prompt = "Describe the image(s)."
         format_style = kwargs.get('format_style', None)
 
         # self._handle_format_instructions(format_style=format_style, prompt=text_prompt)
@@ -452,16 +478,18 @@ class ChatEngine:
         text_prompt = self._handle_role_instructions(text_prompt)
         self._build_messages(prompt=text_prompt, **kwargs)
 
-        model = kwargs.get('image_model', 'dall-e-3')
+        model = kwargs.get('model', 'dall-e-3')
         # Extract parameters with defaults
-        count = kwargs.get('image_count', 1)
-        size = kwargs.get('image_size', "1024x1024").lower()
-        quality = kwargs.get('image_quality', "standard").lower()
-        style = kwargs.get('image_style', 'vivid').lower()
+        count = kwargs.get('count', 1)
+        size = kwargs.get('size', "1024x1024").lower()
+        quality = kwargs.get('quality', "standard").lower()
+        style = kwargs.get('style', 'vivid').lower()
         revised_prompt = kwargs.get('revised_prompt', True)
         response_format = kwargs.get('response_format', 'url')
+
         # Translate size aliases
-        size = self.SIZE_ALIASES.get(size.lower(), size)
+        size_pixels = self.SIZE_ALIASES.get(size.lower(), size)
+        print("%%%%%%%%%%%", size_pixels)
 
         # Adjusting model for count
         if count > 1 and model != 'dall-e-2':
@@ -472,10 +500,11 @@ class ChatEngine:
         model_opts = self.MODEL_OPTIONS['image'].get(model, {})
 
         # Validate and adjust size, quality, and style
-        size = self._validate_model_option(size, model_opts.get('sizes', []), "image_size", model)
+        size_pixels = self._validate_model_option(size_pixels, model_opts.get('sizes', []), "size", model)
         quality = self._validate_model_option(quality, model_opts.get('qualities', []), "quality", model)
-        style = self._validate_model_option(style, model_opts.get('styles', []), "image_style", model)
+        style = self._validate_model_option(style, model_opts.get('styles', []), "style", model)
         logging.info(f"Completed validation of selected options for model '{model}'.")
+        print("%%%%%%%%%%%", size_pixels)
 
         # Validate and adjust count
         if count > model_opts.get('max_count', 1):
@@ -487,30 +516,35 @@ class ChatEngine:
             DO NOT add any detail, just use it AS-IS:
             
             """
+            full_prompt = f"{preface}\n\n{text_prompt}"
         else:
-            preface = ''
+            full_prompt = text_prompt
+
+        # Prepare API call parameters
+        api_params = {
+            "model": model,
+            "prompt": full_prompt,
+            "n": count,
+            "size": size_pixels,
+            "quality": quality,
+            "style": style,
+            "response_format": response_format
+        }
+
+        # Update api_params with additional allowed kwargs
+        for key in self.ALLOWED_IMAGE_KWARGS:
+            if key in kwargs:
+                api_params[key] = kwargs[key]
+
         try:
-            client = OpenAI()
-            # noinspection PyTypeChecker
-            response = client.images.generate(
-                model=model,
-                prompt=preface + text_prompt,
-                n=count,
-                size=size,
-                quality=quality,
-                style=style,
-                response_format=response_format
-            )
-            logging.info(f"The following settings were used to produce the image:\n"
-                         f"model: {model}, count: {count}, size: {size}, quality: "
-                         f"{quality}, style: {style}, preface: '{revised_prompt}'")
+            # Make the API call using the pre-initialized client
+            response = self.openai_client.images.generate(**api_params)
             self.response = response
-        except openai.APIConnectionError as e:
-            raise e
-        except openai.RateLimitError as e:
-            raise e
-        except openai.APIError as e:
-            raise e
+            logging.info("Image API call successful.")
+            return response
+        except openai.OpenAIError as e:
+            logging.error(f"OpenAI API error during image call: {e}")
+            raise
 
     def _build_messages(self, prompt: str | list[str], response_type: str = 'text', **kwargs):
         """
@@ -934,16 +968,29 @@ class ChatEngine:
                 f"Valid options are: {ChatEngine.VALID_RESPONSE_TYPES}"
             )
 
+        # Filter kwargs based on response type
+        if response_type == 'text':
+            allowed_kwargs = self.ALLOWED_TEXT_KWARGS
+        elif response_type == 'image':
+            allowed_kwargs = self.ALLOWED_IMAGE_KWARGS  # Define similarly
+        elif response_type == 'vision':
+            allowed_kwargs = self.ALLOWED_VISION_KWARGS  # Define similarly
+        else:
+            allowed_kwargs = set()
+
+        # Extract allowed kwargs
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed_kwargs}
+
         # Call the appropriate API based on response_type
         if response_type == 'text':
             self.api_used = 'text'
-            self._text_api_call(text_prompt=prompt, **kwargs)
+            self._text_api_call(text_prompt=prompt, **filtered_kwargs)
         elif response_type == 'image':
             self.api_used = 'image'
-            self._image_api_call(text_prompt=prompt, **kwargs)
+            self._image_api_call(text_prompt=prompt, **filtered_kwargs)
         elif response_type == 'vision':
             self.api_used = 'vision'
-            self._vision_api_call(image_prompt=prompt, **kwargs)
+            self._vision_api_call(image_prompt=prompt, **filtered_kwargs)
 
         # If streaming is enabled, return the streaming object
         if self.stream and response_type in ['text', 'vision']:

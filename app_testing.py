@@ -20,18 +20,25 @@ def stream(chunk, container: list):
     st.session_state.stream_placeholder.markdown("".join(container))  # Update display with accumulated content
 
 
-text_prompt = st.text_area("Prompt")
-image_prompt = st.file_uploader("Upload Image")
+text = st.text_area("Prompt")
+file = st.file_uploader("Upload Image")
 
+text_prompt = None
 if st.button("Go"):
-    if image_prompt:
-        prompt = image_prompt
+    if file and text:
         api = "vision"
+        prompt = file
+        text_prompt = text
+    elif file:
+        api = "vision"
+        prompt = file
     else:
-        prompt = text_prompt
         api = None
+        prompt = text
     st.session_state.stream_placeholder = st.empty()
-    reply = st.session_state['chat'].get_response(prompt=prompt, response_type=api)
+    reply = st.session_state['chat'].get_response(
+        prompt=prompt, response_type=api, text_prompt=text_prompt
+    )
     if st.session_state['chat'].api_used != "image":
         streamer = st.session_state['chat'].process_stream(
             reply, chunk_callback=lambda x: stream(x, stream_container)
