@@ -3,11 +3,15 @@ import logging
 import os
 import re
 import threading
+from io import BytesIO, IOBase
+from urllib.parse import urlparse
 
 import openai
 import yaml
 from openai import OpenAI
 from typing import Iterator
+
+from stream_processor import StreamProcessor
 
 
 class ChatEngine:
@@ -75,6 +79,8 @@ class ChatEngine:
     }
 
     VALID_RESPONSE_TYPES = {'text', 'image', 'vision'}
+
+    BASE64_IMAGE_PATTERN = re.compile(r'^data:image/.+;base64,', re.IGNORECASE)
 
     def __init__(self, role_context=None, system_role=None, temperature=1,
                  model="gpt-3.5-turbo", stream=False, api_key=None,
@@ -171,6 +177,9 @@ class ChatEngine:
 
         This method updates `self.complete_prompt` with the final formatted prompt.
         """
+
+        # TODO: POSSIBLY REMOVE THIS ENTIRE METHOD. BE SURE SELF.complete_prompt
+        #  IS NOT USED ELSEWHERE UNINTENDED
 
         # get the adjusted prompt reconstructed with any custom instructions
         adjusted_prompt = self._handle_role_instructions(prompt)
@@ -286,7 +295,6 @@ class ChatEngine:
         logging.info("Initiating vision API call.")
 
         processed_prompts = []
-
         if isinstance(image_prompt, list):
             for item in image_prompt:
                 if not self._prompt_is_url(item) and not self._prompt_is_base64_image(item) and os.path.isfile(item):
@@ -296,10 +304,16 @@ class ChatEngine:
                     processed_prompts.append(item)
         elif isinstance(image_prompt, str):
             if not self._prompt_is_url(image_prompt) and not self._prompt_is_base64_image(image_prompt) and os.path.isfile(image_prompt):
-                logging.info(f"Encoding image file for vision API")
+                logging.info(f"Encoding image file or file-like object for vision API")
                 processed_prompts = self.encode_image_prompts(image_prompt)
             else:
                 processed_prompts = [image_prompt]
+
+        # Handle single file-like object or string
+        elif isinstance(image_prompt, IOBase):  # Direct file-like object check
+            logging.info("Encoding file-like object for vision API")
+            processed_prompts = self.encode_image_prompts(image_prompt)
+
         else:
             logging.error("Invalid type for image_prompt in vision API call.")
             return
@@ -308,10 +322,10 @@ class ChatEngine:
         text_prompt = kwargs.get('text_prompt', "Describe the image(s).")
         format_style = kwargs.get('format_style', None)
 
-        self._handle_format_instructions(format_style=format_style, prompt=text_prompt)
+        # self._handle_format_instructions(format_style=format_style, prompt=text_prompt)
 
         # Build messages for vision API
-        self._build_messages(prompt=self.complete_prompt, response_type='vision', image_prompts=processed_prompts)
+        self._build_messages(prompt=text_prompt, response_type='vision', image_prompts=processed_prompts)
         # logging.info(f"Formatted 'messages' param: {self.messages}")
 
         # Get additional kwargs for API call
@@ -399,6 +413,7 @@ class ChatEngine:
 
         # get the adjusted prompt reconstructed with any custom instructions
         text_prompt = self._handle_role_instructions(text_prompt)
+        self._build_messages(prompt=text_prompt, **kwargs)
 
         model = kwargs.get('image_model', 'dall-e-3')
         # Extract parameters with defaults
@@ -406,7 +421,7 @@ class ChatEngine:
         size = kwargs.get('image_size', "1024x1024").lower()
         quality = kwargs.get('image_quality', "standard").lower()
         style = kwargs.get('image_style', 'vivid').lower()
-        revised_prompt = kwargs.get('revised_prompt', False)
+        revised_prompt = kwargs.get('revised_prompt', True)
         response_format = kwargs.get('response_format', 'url')
         # Translate size aliases
         size = self.SIZE_ALIASES.get(size.lower(), size)
@@ -489,7 +504,11 @@ class ChatEngine:
                 image_prompts = [image_prompts]  # Convert single URL to list
 
             vision_msgs = [{"type": "image_url", "image_url": {"url": url}} for url in image_prompts]
-            user_msg = {"role": "user", "content": [{"type": "text", "text": prompt}] + vision_msgs}
+            # Skip adding image prompts to messages?
+            text_msg = [{"type": "text", "text": prompt}]
+            text_msg.extend(vision_msgs)
+            user_msg = {"role": "user", "content": text_msg}
+            logging.critical(user_msg)
             self.messages.append(user_msg)
         else:
             # Existing logic for text messages
@@ -498,18 +517,18 @@ class ChatEngine:
 
             # Determine user and assistant messages based on the length of the 'prompt'
             if isinstance(prompt, list) and len(prompt) > 1:
-                user_msg = [
+                user_msgs = [
                     {
                         "role": "assistant" if i % 2 else "user",
                         "content": prompt[i]
                     }
                     for i in range(len(prompt))
                 ]
+                # Extend self.messages with the list of messages
+                self.messages.extend(user_msgs)
             else:
-                user_msg = [{"role": "user", "content": self.complete_prompt}]
-
-            # Combine system, user, and assistant messages
-            self.messages.append(user_msg)
+                user_msg = {"role": "user", "content": prompt}
+                self.messages.append(user_msg)
 
     def _handle_role_instructions(self, prompt):
         """
@@ -521,7 +540,7 @@ class ChatEngine:
         Returns:
             str: The inputted prompt with role/context instructions..
         """
-        logging.info(f"Adding any role/context instructions to text prompt: {prompt[:15]}...")
+        logging.info(f"Adding any role/context instructions to text prompt...")
 
         default_documentation = self.CONFIG.get('role_contexts', {}) \
             .get('defaults', {}).get('documentation', '')
@@ -593,72 +612,103 @@ class ChatEngine:
         else:
             # Default to text if the prompt type is unexpected
             logging.warning("Prompt type is unexpected. Defaulting to text API.")
-
+        #TODO: investigate whether returning an adjusted prompt is needed
         return response_type, prompt
 
     @staticmethod
     def _prompt_is_url(string):
-        """
-        Checks if the string is a URL.
-        """
-        pattern = r'https?://[^\s]+'
-        if re.search(pattern, string):
-            return True
-        return False
+        try:
+            result = urlparse(string)
+            return all([result.scheme, result.netloc])
+        except:
+            return False
 
     @staticmethod
     def _prompt_is_base64_image(string):
         """
         Checks if the string is a base64 encoded image.
         """
-        return re.match(r'data:image/.+;base64,', string) is not None
+        return bool(ChatEngine.BASE64_IMAGE_PATTERN.match(string))
 
     @staticmethod
     def _prompt_suggests_image(prompt):
         """
-        Checks if the prompt starts with phrases that suggest an image generation request.
-        """
-        image_keywords = [
-            'sketch of', 'paint', 'design a', 'visualize',
-            'depict', 'create an image of', 'generate a picture of', 'illustration of',
-            'render', 'artwork of', 'graphic of', 'visual representation of',
-            'art style', 'art format', 'image context', 'image of'
-        ]
-        # Split the prompt into words and consider only the first five
-        first_five_words = ' '.join(prompt.lower().split()[:5])
-        # Check if any of the keywords match within the first five words
-        return any(keyword in first_five_words for keyword in image_keywords)
-
-    @staticmethod
-    def encode_image_prompts(image_file_paths):
-        """
-        Encodes one or multiple image files to base64 data URLs.
+        Determines if the user's prompt suggests an image generation request,
+        while minimizing false positives by ensuring the presence of action verbs.
 
         Parameters:
-            image_file_paths (str or list): A single path or a list of paths to the image files.
+            prompt (str): The user's input prompt.
+
+        Returns:
+            bool: True if the prompt suggests an image generation request, False otherwise.
+        """
+        # Define action verbs that suggest image generation
+        action_verbs = [
+            r'\bgenerate\b', r'\bcreate\b', r'\bdesign\b', r'\bvisualize\b',
+            r'\bdepict\b', r'\billustrate\b', r'\brender\b', r'\bproduce\b',
+            r'\bmake\b', r'\bcompose\b', r'\bcraft\b', r'\bconstruct\b',
+            r'\bdraw\b', r'\bsketch\b'
+        ]
+
+        # Define image-related keywords and phrases
+        image_keywords = [
+            r'\bimage of\b', r'\bpicture of\b', r'\bpicture using\b',
+            r'\bimage from\b', r'\bimage using\b', r'\billustration of\b',
+            r'\bgraphic of\b', r'\bvisual representation of\b',
+            r'\bartwork of\b', r'\bdesign for\b', r'\blogo for\b',
+            r'\bscene of\b', r'\bconcept art of\b', r'\bmodel of\b',
+            r'\bblueprint of\b', r'\bschematic of\b', r'\bdigital art of\b',
+            r'\bvectors of\b', r'\binfographic of\b'
+        ]
+
+        # Compile regex patterns for action verbs and image keywords
+        verbs_pattern = re.compile('|'.join(action_verbs), re.IGNORECASE)
+        keywords_pattern = re.compile('|'.join(image_keywords), re.IGNORECASE)
+
+        # Search for action verbs and image keywords in the prompt
+        verbs_found = verbs_pattern.search(prompt)
+        keywords_found = keywords_pattern.search(prompt)
+
+        # Debugging statements (can be removed in production)
+        print(f"Verbs found: {verbs_found.group(0) if verbs_found else 'None'}")
+        print(f"Image keywords found: {keywords_found.group(0) if keywords_found else 'None'}")
+
+        # Return True only if both an action verb and an image keyword are found
+        return bool(verbs_found and keywords_found)
+
+    @staticmethod
+    def encode_image_prompts(image_file_paths, file_type=None):
+        """
+        Encodes one or multiple image files or file-like objects to base64 data URLs.
+
+        Parameters:
+            image_file_paths (str, file-like, or list): A single path, file-like object, or a list of paths/objects.
+            file_type (str): Default file extension to use if no extension is found.
 
         Returns:
             list: List of base64 encoded data URLs of the images.
         """
-        # if isinstance(image_file_paths, str):
-        #     # If it's a single image path, convert it to a list
-        #     image_file_paths = [image_file_paths]
-        #     logging.info(f"Begin encoding of files: {image_file_paths}")
 
-        def encode_single_image(image_file_path):
-            """Encodes a single image file to a base64 data URL."""
-            if not os.path.isfile(image_file_path):
-                logging.warning(f"File not found: {image_file_path}")
+        def encode_single_image(image_file):
+            """Encodes a single image file or file-like object to a base64 data URL."""
+            if isinstance(image_file, IOBase):  # Check if it's a file-like object
+                logging.info(
+                    f"Encoding file-like image object: {getattr(image_file, 'name', 'Unnamed file-like object')}")
+                bytes_data = image_file.read()
+                file_extension = getattr(image_file, 'name', f".{file_type}").rsplit('.', 1)[-1].lower() or file_type
+            elif os.path.isfile(image_file):  # Standard file path
+                logging.info(f"Encoding image: {image_file}")
+                with open(image_file, "rb") as f:
+                    bytes_data = f.read()
+                file_extension = image_file.rsplit('.', 1)[-1].lower() if '.' in image_file else file_type
+            else:
+                logging.warning(f"File or file-like object not found: {image_file}")
                 return None
 
-            logging.info(f"Encoding image: {image_file_path}")
-            with open(image_file_path, "rb") as image_file:
-                bytes_data = image_file.read()
-
-            file_ext = image_file_path.split('.')[-1].lower()
-            file_ext = mime_to_extension.get(file_ext, file_ext)
+            # Map to the appropriate MIME type if available, or keep as is
+            file_extension = mime_to_extension.get(file_extension, file_extension)
             base64_image = base64.b64encode(bytes_data).decode('utf-8')
-            return f"data:image/{file_ext};base64,{base64_image}"
+            return f"data:image/{file_extension};base64,{base64_image}"
 
         mime_to_extension = {
             'jpeg': 'jpg',
@@ -669,12 +719,13 @@ class ChatEngine:
             'webp': 'webp'
         }
 
-        if isinstance(image_file_paths, str):
-            # Process a single image file path
+        # Handle single or multiple inputs
+        if isinstance(image_file_paths, (str, IOBase)):
+            # Process a single image file path or file-like object
             return encode_single_image(image_file_paths)
         elif isinstance(image_file_paths, list):
-            # Process a list of image file paths
-            encoded_images = [encode_single_image(path) for path in image_file_paths if path]
+            # Process a list of image file paths or file-like objects
+            encoded_images = [encode_single_image(file) for file in image_file_paths if file]
             return [img for img in encoded_images if img]  # Filter out any None values
 
         logging.warning("Invalid input type for image_file_paths.")
@@ -696,7 +747,7 @@ class ChatEngine:
         if response_type == 'text':
             return self.response.choices[0].message.content
         elif response_type == 'image':
-            return self._extract_image_response(kwargs.get('revised_prompt', False))
+            return self._extract_image_response(kwargs.get('revised_prompt', True))
         elif response_type == 'vision':
             return self.response.choices[0].message.content
 
@@ -748,6 +799,21 @@ class ChatEngine:
 
         return results
 
+    def process_stream(self, stream_obj: Iterator, update_history: bool = True, chunk_callback=None) -> StreamProcessor:
+        """
+        Returns a StreamProcessor instance for processing the streaming object.
+
+        Parameters:
+            stream_obj (Iterator): The streaming object returned by get_response.
+            update_history (bool): Whether to update self.messages with the assistant's reply.
+            chunk_callback (callable, optional): A function to call with each chunk of the reply.
+                                                 Defaults to None (will use default chunk callback).
+
+        Returns:
+            StreamProcessor: An iterator that yields each chunk as it is received.
+        """
+        return StreamProcessor(stream_obj, update_history, self.messages, chunk_callback=chunk_callback)
+
     def get_response(self, prompt: str | list = None,
                      response_type: str = None,
                      raw_output: bool = False, system_role: str = None, **kwargs) -> str | dict | tuple | list | Iterator:
@@ -793,7 +859,8 @@ class ChatEngine:
 
         # Automatically determine response type if not provided
         if not response_type:
-            response_type, prompt = self._infer_response_type(prompt)
+            #! DO NOT use prompt_adjusted until this method is optimized
+            response_type, prompt_adjusted = self._infer_response_type(prompt)
 
         logging.info(f"Getting response: type={response_type}")
 
@@ -813,15 +880,29 @@ class ChatEngine:
             self._text_api_call(text_prompt=prompt, **kwargs)
         elif response_type == 'image':
             self.api_used = 'image'
-            self.stream = False
             self._image_api_call(text_prompt=prompt, **kwargs)
         elif response_type == 'vision':
             self.api_used = 'vision'
             self._vision_api_call(image_prompt=prompt, **kwargs)
 
-        # Return finished response from OpenAI
-        if not raw_output and not self.stream:  # if raw and stream are False
-            response = self.extract_response(response_type, **kwargs)
-            self.messages.append({"role": "assistant", "content": response})
+        # If streaming is enabled, return the streaming object
+        if self.stream and response_type in ['text', 'vision']:
+            return self.response
+
+        # Non-streaming response handling
+        if not raw_output:
+            assistant_reply = self.extract_response(response_type, **kwargs)
+            if response_type != 'image':
+                self.messages.append({"role": "assistant", "content": assistant_reply})
+            elif response_type == 'image':
+                if kwargs.get('revised_prompt', True):
+                    self.messages.append({"role": "assistant", "content": f'here is a description of the image i created for you: {assistant_reply[0][1]}'})
+                else:
+                    self.messages.append({"role": "assistant", "content": '[GENERATED IMAGE]'})
+
+            return assistant_reply
         else:
+            # raw_output is True
+            assistant_reply = self.extract_response(response_type, **kwargs)
+            self.messages.append({"role": "assistant", "content": assistant_reply})
             return self.response
