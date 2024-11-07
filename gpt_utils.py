@@ -13,6 +13,8 @@ from typing import Iterator
 
 from stream_processor import StreamProcessor
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
+
 
 class ChatEngine:
     """
@@ -82,9 +84,9 @@ class ChatEngine:
 
     BASE64_IMAGE_PATTERN = re.compile(r'^data:image/.+;base64,', re.IGNORECASE)
 
-    def __init__(self, role_context=None, system_role=None, temperature=1,
-                 model="gpt-3.5-turbo", stream=False, api_key=None,
-                 config_path=None, enable_logging=False):
+    def __init__(self, role_context=None, system_role=None, temperature: float = 0.7,
+                 model: str = "gpt-3.5-turbo", stream: bool = False, api_key: str = None,
+                 config_path: str = None, enable_logging: bool = False):
         """
         Initializes the ChatEngine instance with various configuration settings.
 
@@ -99,9 +101,7 @@ class ChatEngine:
 
         If a configuration file is provided, it sets up additional formatting and role contexts.
         """
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
-        if not enable_logging:
-            logging.disable(logging.CRITICAL)
+        self._configure_logging(enable_logging)
 
         # attribute set when the API called is made (text, image, vision)
         self.api_used = None
@@ -119,7 +119,11 @@ class ChatEngine:
         self.messages: list = [{"role": "system", "content": self.system_role}]
 
         # Set up API access key
-        OpenAI.api_key = api_key
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            logging.error("OpenAI API key must be provided either via parameter or environment variable.")
+            raise ValueError("OpenAI API key must be provided either via parameter or environment variable.")
+        openai.api_key = self.api_key  # Set the API key for OpenAI
 
         # Turn off/on streaming of response
         self.stream = stream
@@ -135,7 +139,40 @@ class ChatEngine:
             self.role_context = 'general'
 
         # Validate and set temperature
-        self.temperature = temperature
+        self.temperature = self._validate_temperature(temperature)
+
+    def _configure_logging(self, enable_logging: bool) -> None:
+        """
+        Configures the logging settings.
+
+        Parameters:
+            enable_logging (bool): If True, enables INFO level logging. Otherwise, disables logging.
+        """
+        if enable_logging:
+            logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
+            logging.info("Logging is enabled.")
+        else:
+            logging.disable(logging.CRITICAL)
+            logging.debug("Logging is disabled.")
+
+    def _validate_temperature(self, temperature: float) -> float:
+        """
+        Validates the temperature parameter to ensure it is within acceptable bounds.
+
+        Parameters:
+            temperature (float): The desired temperature setting.
+
+        Returns:
+            float: The validated temperature.
+
+        Raises:
+            ValueError: If temperature is not within (0, 2).
+        """
+        if not (0 <= temperature <= 2):
+            logging.warning(f"Temperature {temperature} out of bounds. Clamping to [0, 2].")
+            temperature = max(0.0, min(temperature, 2))
+        logging.info(f"Temperature set to {temperature}.")
+        return temperature
 
     def set_md_table_style(self, style):
         available_table_styles = self.CONFIG['response_formats']['markdown']['table_styles'].keys()
@@ -693,8 +730,8 @@ class ChatEngine:
         keywords_found = keywords_pattern.search(prompt)
 
         # Debugging statements (can be removed in production)
-        print(f"Verbs found: {verbs_found.group(0) if verbs_found else 'None'}")
-        print(f"Image keywords found: {keywords_found.group(0) if keywords_found else 'None'}")
+        logging.debug(f"Verbs found: {verbs_found.group(0) if verbs_found else 'None'}")
+        logging.debug(f"Image keywords found: {keywords_found.group(0) if keywords_found else 'None'}")
 
         # Return True only if both an action verb and an image keyword are found
         return bool(verbs_found and keywords_found)
