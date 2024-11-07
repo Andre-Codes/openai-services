@@ -475,14 +475,9 @@ class ChatEngine:
         except openai.APIError as e:
             raise e
 
-    def _build_messages(self, prompt, response_type='text', **kwargs):
+    def _build_messages(self, prompt: str | list[str], response_type: str = 'text', **kwargs):
         """
-        Constructs the message list for API calls based on the given prompt, response type,
-        and additional keyword arguments.
-
-        This method prepares the message structure required by the OpenAI API, which varies
-        depending on the response type (e.g., 'text', 'vision'). It ensures that the messages
-        are formatted correctly, including handling image prompts for 'vision' response types.
+        Constructs and appends the message list for API calls based on the given prompt and response type.
 
         Parameters:
             prompt (str | list): The main text prompt or a list of prompts for the API call.
@@ -492,43 +487,71 @@ class ChatEngine:
         Keyword Arguments:
             image_prompts (list, optional): Used when response_type is 'vision'. A list of image URL(s).
             system_role (str, optional): The role of the system in the conversation, influencing the message structure.
-            Other keyword arguments may be relevant for specific response types and are handled accordingly.
 
-        This method updates `self.messages` with the appropriately structured messages for the API call.
+        Raises:
+            ValueError: If the prompt structure is invalid.
         """
 
         if response_type == 'vision':
-            # Handle vision API message format
-            image_prompts = kwargs.get('image_prompts', [])
-            if isinstance(image_prompts, str):
-                image_prompts = [image_prompts]  # Convert single URL to list
-
-            vision_msgs = [{"type": "image_url", "image_url": {"url": url}} for url in image_prompts]
-            # Skip adding image prompts to messages?
-            text_msg = [{"type": "text", "text": prompt}]
-            text_msg.extend(vision_msgs)
-            user_msg = {"role": "user", "content": text_msg}
-            logging.critical(user_msg)
-            self.messages.append(user_msg)
+            self._build_vision_messages(prompt, **kwargs)
+        elif response_type == 'text':
+            self._build_text_messages(prompt)
         else:
-            # Existing logic for text messages
-            if not all(isinstance(item, str) for item in prompt):
-                raise ValueError(f"All elements in the list should be strings {prompt}")
+            logging.error(f"Unsupported response type: {response_type}")
+            raise ValueError(f"Unsupported response type: {response_type}")
 
-            # Determine user and assistant messages based on the length of the 'prompt'
-            if isinstance(prompt, list) and len(prompt) > 1:
-                user_msgs = [
-                    {
-                        "role": "assistant" if i % 2 else "user",
-                        "content": prompt[i]
-                    }
-                    for i in range(len(prompt))
-                ]
-                # Extend self.messages with the list of messages
-                self.messages.extend(user_msgs)
-            else:
-                user_msg = {"role": "user", "content": prompt}
-                self.messages.append(user_msg)
+    def _build_text_messages(self, prompt: str | list[str]) -> None:
+        # Existing logic for text messages
+        if not all(isinstance(item, str) for item in prompt):
+            logging.error(f"All elements in the prompt list must be strings. Received: {prompt}")
+            raise ValueError(f"All elements in the list should be strings {prompt}")
+
+        # Determine user and assistant messages based on the length of the 'prompt'
+        if isinstance(prompt, list) and len(prompt) > 1:
+            user_msgs = [
+                {
+                    "role": "assistant" if i % 2 else "user",
+                    "content": prompt[i]
+                }
+                for i in range(len(prompt))
+            ]
+            logging.debug(f"Appending dialogue history messages: {user_msgs}")
+            self.messages.extend(user_msgs)
+        else:
+            user_msg = {"role": "user", "content": prompt}
+            logging.debug(f"Appending single user message from list: {user_msg}")
+            self.messages.append(user_msg)
+
+    def _build_vision_messages(self, prompt: str | list[str], **kwargs) -> None:
+        """
+        Constructs and appends messages formatted for vision API calls.
+
+        Parameters:
+            prompt (str | list): The main text prompt for the vision API.
+            image_prompts (list, optional): A list of image URLs or file paths.
+
+        Raises:
+            ValueError: If image_prompts are not in the expected format.
+        """
+        # Handle vision API message format
+
+        image_prompts = kwargs.get('image_prompts', [])
+
+        if isinstance(image_prompts, str):
+            image_prompts = [image_prompts]  # Convert single URL to list
+        elif not isinstance(image_prompts, list):
+            logging.error("image_prompts must be a string or a list of strings.")
+            raise ValueError("image_prompts must be a string or a list of strings.")
+
+        # Construct vision messages
+        vision_msgs = [{"type": "image_url", "image_url": {"url": url}} for url in image_prompts]
+        text_msg = {"type": "text", "text": prompt} if isinstance(prompt, str) else {"type": "text",
+                                                                                     "text": " ".join(prompt)}
+        content = [text_msg] + vision_msgs
+
+        user_msg = {"role": "user", "content": content}
+        logging.debug(f"Appending vision user message: {user_msg}")
+        self.messages.append(user_msg)
 
     def _handle_role_instructions(self, prompt):
         """
