@@ -24,6 +24,7 @@ __pycache__/
 /venv
 /venv*/
 venv/
+.venv/
 
 # Distribution / packaging
 bin/
@@ -71,6 +72,6 @@ docs/_build/
 
 # Custom
 archive/
-test.py
 *.notes
 misc/
+*_testing.py
