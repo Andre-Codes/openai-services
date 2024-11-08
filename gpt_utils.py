@@ -3,13 +3,15 @@ import logging
 import os
 import re
 import threading
+import time
 from io import BytesIO, IOBase
 from urllib.parse import urlparse
+from typing import Iterator, Any
 
 import openai
-import yaml
+from openai.types.chat import ChatCompletion
 from openai import OpenAI
-from typing import Iterator
+import yaml
 
 from stream_processor import StreamProcessor
 
@@ -86,7 +88,7 @@ class ChatEngine:
 
     # Allowed kwargs for API calls
     ALLOWED_TEXT_KWARGS = {'response_format', 'stream', 'top_p', 'max_tokens', 'stop', 'presence_penalty', 'frequency_penalty'}
-    ALLOWED_IMAGE_KWARGS = {'model', 'count', 'size', 'quality', 'style', 'response_format'}
+    ALLOWED_IMAGE_KWARGS = {'model', 'n', 'size', 'quality', 'style', 'response_format'}
     ALLOWED_VISION_KWARGS = {'text_prompt', 'stream', 'top_p', 'max_tokens', 'stop', 'presence_penalty', 'frequency_penalty'}
 
     def __init__(self, role_context=None, system_role=None, temperature: float = 0.7,
@@ -107,6 +109,10 @@ class ChatEngine:
         If a configuration file is provided, it sets up additional formatting and role contexts.
         """
         self._configure_logging(enable_logging)
+
+        self.raw_response = None
+        # Initialize empty response, this will store the latest response
+        self.response = None
 
         # attribute set when the API called is made (text, image, vision)
         self.api_used = None
@@ -290,7 +296,7 @@ class ChatEngine:
         # Check for streaming and format_style in kwargs
         format_style = kwargs.get('format_style', 'text')
 
-        self._handle_format_instructions(format_style=format_style, prompt=text_prompt)
+        # self._handle_format_instructions(format_style=format_style, prompt=text_prompt)
         self._build_messages(prompt=text_prompt, **kwargs)
 
         response_format_mapping = {
@@ -304,30 +310,30 @@ class ChatEngine:
         # Set top_p if provided, else default to 1.0
         top_p_value = top_p if top_p is not None else 1.0
 
-        # Prepare API call parameters
-        api_params = {
+        # Prepare base parameters
+        base_params = {
             "model": self.model,
             "messages": self.messages,
             "temperature": self.temperature,
-            "top_p": top_p_value,
-            "stream": use_stream,
-            "response_format": response_format
+            "stream": use_stream
         }
 
-        # Update api_params with additional kwargs, ensuring no conflicts
-        allowed_kwargs = {'max_tokens', 'stop', 'presence_penalty', 'frequency_penalty'}
-        for key in allowed_kwargs:
-            if key in kwargs:
-                api_params[key] = kwargs[key]
+        # Prepare API parameters using the helper method
+        api_params = self._prepare_api_params(base_params, self.ALLOWED_TEXT_KWARGS, **kwargs)
 
         try:
             # Make the API call using the pre-initialized client
             response = self.openai_client.chat.completions.create(**api_params)
-            self.response = response
             logging.info("Text API call successful.")
             return response
-        except openai.OpenAIError as e:
-            logging.error(f"OpenAI API error during text call: {e}")
+        except openai.APIConnectionError as e:
+            logging.error(f"API connection error: {e}")
+            raise
+        except openai.RateLimitError as e:
+            logging.error(f"Rate limit exceeded: {e}")
+            raise
+        except openai.APIError as e:
+            logging.error(f"OpenAI API error: {e}")
             raise
 
     def _vision_api_call(self, text_prompt, image_prompt, stream: bool = None, top_p: float = None, **kwargs):
@@ -357,29 +363,7 @@ class ChatEngine:
 
         use_stream = stream if stream is not None else self.stream
 
-        processed_prompts = []
-        if isinstance(image_prompt, list):
-            for item in image_prompt:
-                if not self._prompt_is_url(item) and not self._prompt_is_base64_image(item) and os.path.isfile(item):
-                    logging.info(f"Encoding image file for vision API")
-                    processed_prompts.append(self.encode_image_prompts(item))
-                else:
-                    processed_prompts.append(item)
-        elif isinstance(image_prompt, str):
-            if not self._prompt_is_url(image_prompt) and not self._prompt_is_base64_image(image_prompt) and os.path.isfile(image_prompt):
-                logging.info(f"Encoding image file or file-like object for vision API")
-                processed_prompts = self.encode_image_prompts(image_prompt)
-            else:
-                processed_prompts = [image_prompt]
-
-        # Handle single file-like object or string
-        elif isinstance(image_prompt, IOBase):  # Direct file-like object check
-            logging.info("Encoding file-like object for vision API")
-            processed_prompts = self.encode_image_prompts(image_prompt)
-
-        else:
-            logging.error("Invalid type for image_prompt in vision API call.")
-            return
+        processed_prompts = self.process_vision_prompt(image_prompt)
 
         # Get text_prompt, if not found or found but value is None
         # default to standard message
@@ -393,55 +377,34 @@ class ChatEngine:
         self._build_messages(prompt=text_prompt, response_type='vision', image_prompts=processed_prompts)
         # logging.info(f"Formatted 'messages' param: {self.messages}")
 
-        # Prepare API call parameters
-        api_params = {
+        # Prepare base parameters
+        base_params = {
             "model": self.model,
             "messages": self.messages,
             "temperature": self.temperature,
-            "top_p": top_p if top_p is not None else 1.0,
-            "stream": use_stream,
+            "stream": use_stream
         }
 
-        # Update api_params with additional kwargs, ensuring no conflicts
-        allowed_kwargs = {'max_tokens', 'stop', 'presence_penalty', 'frequency_penalty'}
-        for key in allowed_kwargs:
-            if key in kwargs:
-                api_params[key] = kwargs[key]
+        # Prepare API parameters using the helper method
+        api_params = self._prepare_api_params(base_params, self.ALLOWED_VISION_KWARGS, **kwargs)
 
         try:
             # Make the API call using the pre-initialized client
             response = self.openai_client.chat.completions.create(**api_params)
-            self.response = response
             logging.info("Vision API call successful.")
             return response
-        except openai.OpenAIError as e:
-            logging.error(f"OpenAI API error during vision call: {e}")
+        except openai.APIConnectionError as e:
+            logging.error(f"API connection error: {e}")
             raise
-
-    @staticmethod
-    def _validate_model_option(option_value, valid_options, option_name, model=None):
-        """
-        Validates the given option value against a list of valid options. Ignores the option
-        if the model does not support it.
-
-        Parameters:
-            option_value (str): The value to validate.
-            valid_options (list): A list of valid options.
-            option_name (str): The name of the option for logging purposes.
-            model (str, optional): The model for which the option is being validated.
-
-        Returns:
-            str: A valid option value or None if the option is not supported.
-        """
-
-        if valid_options == [None]:
-            logging.info(f"The parameter '{option_name}' is not supported by the model '{model}'. Ignoring it.")
-            return 'vivid'  # something still needs to be passed to the api
-        elif valid_options and option_value not in valid_options:
-            default = valid_options[0]
-            logging.info(f"Provided {option_name} is invalid for model '{model}'. Defaulting to {default}.")
-            return default
-        return option_value
+        except openai.RateLimitError as e:
+            logging.error(f"Rate limit exceeded: {e}")
+            raise
+        except openai.APIError as e:
+            logging.error(f"OpenAI API error: {e}")
+            raise
+        finally:
+            # Replace the image url/base64 for truncating purposes
+            self.messages[-1]['content'] = "[USER_PROVIDED_IMAGE(S)]"
 
     def _image_api_call(self, text_prompt, **kwargs):
         """
@@ -480,12 +443,12 @@ class ChatEngine:
             text_prompt = text_prompt[-1]
 
         # get the adjusted prompt reconstructed with any custom instructions
-        text_prompt = self._handle_role_instructions(text_prompt)
+        # text_prompt = self._handle_role_instructions(text_prompt)
         self._build_messages(prompt=text_prompt, **kwargs)
 
         model = kwargs.get('model', 'dall-e-3')
         # Extract parameters with defaults
-        count = kwargs.get('count', 1)
+        count = kwargs.get('n', 1)
         size = kwargs.get('size', "1024x1024").lower()
         quality = kwargs.get('quality', "standard").lower()
         style = kwargs.get('style', 'vivid').lower()
@@ -494,13 +457,8 @@ class ChatEngine:
 
         # Translate size aliases
         size_pixels = self.SIZE_ALIASES.get(size.lower(), size)
-        print("%%%%%%%%%%%", size_pixels)
 
-        # Adjusting model for count
-        if count > 1 and model != 'dall-e-2':
-            model = 'dall-e-2'
-            logging.info(f"Reverting to '{model}' since requested image_count > 1")
-
+        # TODO: move model option validation to prepare_api_params()
         # Fetch model options
         model_opts = self.MODEL_OPTIONS['image'].get(model, {})
 
@@ -509,47 +467,160 @@ class ChatEngine:
         quality = self._validate_model_option(quality, model_opts.get('qualities', []), "quality", model)
         style = self._validate_model_option(style, model_opts.get('styles', []), "style", model)
         logging.info(f"Completed validation of selected options for model '{model}'.")
-        print("%%%%%%%%%%%", size_pixels)
-
-        # Validate and adjust count
-        if count > model_opts.get('max_count', 1):
-            count = model_opts['max_count']
 
         if not revised_prompt and model != 'dall-e-2':
             preface = """
             I NEED to test how the tool works with extremely simple prompts. 
             DO NOT add any detail, just use it AS-IS:
-            
+
             """
             full_prompt = f"{preface}\n\n{text_prompt}"
         else:
             full_prompt = text_prompt
 
-        # Prepare API call parameters
-        api_params = {
-            "model": model,
+        # Prepare base parameters
+        base_params = {
+            "model": kwargs.get('model', 'dall-e-3'),
             "prompt": full_prompt,
-            "n": count,
-            "size": size_pixels,
-            "quality": quality,
-            "style": style,
-            "response_format": response_format
         }
 
-        # Update api_params with additional allowed kwargs
-        for key in self.ALLOWED_IMAGE_KWARGS:
-            if key in kwargs:
-                api_params[key] = kwargs[key]
+        # Prepare API parameters using the helper method
+        api_params = self._prepare_api_params(base_params, self.ALLOWED_IMAGE_KWARGS, **kwargs)
 
         try:
             # Make the API call using the pre-initialized client
             response = self.openai_client.images.generate(**api_params)
-            self.response = response
             logging.info("Image API call successful.")
             return response
-        except openai.OpenAIError as e:
-            logging.error(f"OpenAI API error during image call: {e}")
+        except openai.APIConnectionError as e:
+            logging.error(f"API connection error: {e}")
             raise
+        except openai.RateLimitError as e:
+            logging.error(f"Rate limit exceeded: {e}")
+            raise
+        except openai.APIError as e:
+            logging.error(f"OpenAI API error: {e}")
+            raise
+
+    def _prepare_api_params(self, base_params: dict, allowed_params: set, **kwargs) -> dict:
+        api_params = base_params.copy()
+
+        for key, value in kwargs.items():
+            if key in allowed_params:
+                # Validate specific parameters
+                if key == 'temperature' and not (0 <= value <= 2):
+                    raise ValueError(f"Temperature {value} out of bounds. Must be between 0 and 2.")
+                if key == 'n':
+                    # Adjusting model for count
+                    if value > 1:
+                        api_params['model'] = 'dall-e-2'
+                        logging.info(f"requested image count > 1, using model 'dall-e-2'")
+                    # Validate and adjust count
+                    value = min(self.MODEL_OPTIONS['image']['dall-e-2'].get('max_count', 1), value)
+
+                # Add more validations as needed
+                api_params[key] = value
+            else:
+                logging.warning(f"Ignoring unsupported parameter '{key}' for this API call.")
+
+        return api_params
+
+    def process_vision_prompt(self, image_prompt: str | IOBase | list[str, IOBase]) -> list[str]:
+        """
+        Processes various types of image prompts, including file paths, URLs, base64 strings,
+        IOBase file-like objects, and lists of these types. Encodes file paths and file-like
+        objects as needed for the vision API.
+
+        Parameters
+        ----------
+        image_prompt : Union[str, IOBase, List[Union[str, IOBase]]]
+
+            The input image prompt(s) to be processed. This can be:
+
+                - A single string representing a file path, URL, or base64-encoded image string.
+                - A single IOBase instance (e.g., an open file or file-like object).
+                - A list containing any combination of strings and IOBase instances.
+
+        Returns
+        -------
+        list[str]
+            A list of processed prompts suitable for the vision API. Encoded file paths and
+            IOBase instances are returned as base64 strings, while URLs and base64 strings
+            are returned directly.
+
+        Raises
+        ------
+        ValueError
+            If any item in the list or the input itself is not a supported type.
+        """
+        processed_prompts = []
+        if isinstance(image_prompt, list):
+            # Step 1: Iterate through each item in a mixed list
+            for item in image_prompt:
+                if isinstance(item, IOBase):
+                    # Encode IOBase objects (file-like objects)
+                    processed_prompts.append(self.encode_image_prompts(item))
+
+                elif isinstance(item, str):
+                    # Check if the string is a valid file path and encode it
+                    if not self._prompt_is_url(item) and not self._prompt_is_base64_image(item) and os.path.isfile(
+                            item):
+                        processed_prompts.append(self.encode_image_prompts(item))
+                    else:
+                        logging.info(f"No encoding needed for url: {item}")
+                        # Assume the string is a URL or base64 image string and add it directly
+                        processed_prompts.append(item)
+
+                else:
+                    # If an unsupported type is found, log an error for that item
+                    logging.warning(f"Unsupported type in image_prompt list: {type(item)}. Skipping this item.")
+                    continue
+
+        # Step 2: Handle single string (file path, URL, or base64 image string)
+        elif isinstance(image_prompt, str):
+            if not self._prompt_is_url(image_prompt) and not self._prompt_is_base64_image(
+                    image_prompt) and os.path.isfile(image_prompt):
+                logging.info("Encoding image file or file-like object for vision API")
+                processed_prompts = self.encode_image_prompts(image_prompt)
+            else:
+                # Assume single string is a URL or base64 image string
+                processed_prompts = [image_prompt]
+
+        # Step 3: Handle single IOBase instance (file-like object)
+        elif isinstance(image_prompt, IOBase):
+            logging.info("Encoding single file-like object for vision API")
+            processed_prompts = self.encode_image_prompts(image_prompt)
+
+        else:
+            logging.error("Invalid type for image_prompt in vision API call.")
+            return
+
+        return processed_prompts
+
+    @staticmethod
+    def _validate_model_option(option_value, valid_options, option_name, model=None):
+        """
+        Validates the given option value against a list of valid options. Ignores the option
+        if the model does not support it.
+
+        Parameters:
+            option_value (str): The value to validate.
+            valid_options (list): A list of valid options.
+            option_name (str): The name of the option for logging purposes.
+            model (str, optional): The model for which the option is being validated.
+
+        Returns:
+            str: A valid option value or None if the option is not supported.
+        """
+
+        if valid_options == [None]:
+            logging.info(f"The parameter '{option_name}' is not supported by the model '{model}'. Ignoring it.")
+            return 'vivid'  # something still needs to be passed to the api
+        elif valid_options and option_value not in valid_options:
+            default = valid_options[0]
+            logging.info(f"Provided {option_name} is invalid for model '{model}'. Defaulting to {default}.")
+            return default
+        return option_value
 
     def _build_messages(self, prompt: str | list[str], response_type: str = 'text', **kwargs):
         """
@@ -727,7 +798,9 @@ class ChatEngine:
         """
         Checks if the string is a base64 encoded image.
         """
-        return bool(ChatEngine.BASE64_IMAGE_PATTERN.match(string))
+        matched = ChatEngine.BASE64_IMAGE_PATTERN.match(string)
+        print(matched)
+        return bool(matched)
 
     @staticmethod
     def _prompt_suggests_image(prompt):
@@ -796,7 +869,7 @@ class ChatEngine:
                 bytes_data = image_file.read()
                 file_extension = getattr(image_file, 'name', f".{file_type}").rsplit('.', 1)[-1].lower() or file_type
             elif os.path.isfile(image_file):  # Standard file path
-                logging.info(f"Encoding image: {image_file}")
+                logging.info(f"Encoding image from path: {image_file}")
                 with open(image_file, "rb") as f:
                     bytes_data = f.read()
                 file_extension = image_file.rsplit('.', 1)[-1].lower() if '.' in image_file else file_type
@@ -830,11 +903,12 @@ class ChatEngine:
         logging.warning("Invalid input type for image_file_paths.")
         return None
 
-    def extract_response(self, response_type, **kwargs):
+    def extract_response(self, raw_response: ChatCompletion, response_type, **kwargs):
         """
         Extracts and formats the response from the OpenAI API based on the response type.
 
         Parameters:
+            raw_response:
             response_type (str): The type of response ('text', 'image', or 'vision').
             kwargs: Additional keyword arguments.
 
@@ -844,13 +918,13 @@ class ChatEngine:
         logging.info(f"Extracting response for type: {response_type}")
 
         if response_type == 'text':
-            return self.response.choices[0].message.content
+            return raw_response.choices[0].message.content
         elif response_type == 'image':
-            return self._extract_image_response(kwargs.get('revised_prompt', True))
+            return self._extract_image_response(raw_response, kwargs.get('revised_prompt', True))
         elif response_type == 'vision':
-            return self.response.choices[0].message.content
+            return raw_response.choices[0].message.content
 
-    def _extract_image_response(self, revised_prompt):
+    def _extract_image_response(self, raw_response: ChatCompletion, revised_prompt):
         """
         Extracts the image response, handling URLs and base64 JSON.
 
@@ -861,18 +935,18 @@ class ChatEngine:
             Either a list of image URLs/b64_json or tuples of image URLs/b64_json and revised prompts.
         """
 
-        if any(getattr(image, 'b64_json', None) for image in self.response.data):
+        if any(getattr(image, 'b64_json', None) for image in raw_response.data):
             # Handling base64 JSON data
             logging.info("Extracting 'b64_json' image response")
-            data = [getattr(image, 'b64_json', None) for image in self.response.data]
+            data = [getattr(image, 'b64_json', None) for image in raw_response.data]
         else:
             # Handling URLs
             logging.info("Extracting 'url' image response")
-            data = [getattr(image, 'url', None) for image in self.response.data]
+            data = [getattr(image, 'url', None) for image in raw_response.data]
 
         if revised_prompt:
             logging.info("Including revised prompts in response (creates a list of tuples).")
-            revised_prompts = [getattr(image, 'revised_prompt', None) for image in self.response.data]
+            revised_prompts = [getattr(image, 'revised_prompt', None) for image in raw_response.data]
             return list(zip(data, revised_prompts))
 
         return data
@@ -913,38 +987,108 @@ class ChatEngine:
         """
         return StreamProcessor(stream_obj, update_history, self.messages, chunk_callback=chunk_callback)
 
+    def _update_assistant_messages(self, response_type: str, response_extract: Any, **kwargs):
+        """
+        Updates the self.messages list with the assistant's reply.
+
+        Args:
+            response_type (str): The type of response ('text', 'image', 'vision').
+            response_extract (Any): The extracted response content.
+            **kwargs: Additional keyword arguments.
+        """
+        if response_type == 'image':
+            if kwargs.get('revised_prompt', True):
+                description = f"Here is a description of the image I created for you: {response_extract[0][1]}"
+                self.messages.append({"role": "assistant", "content": description})
+            else:
+                self.messages.append({"role": "assistant", "content": "[GENERATED IMAGE]"})
+        elif response_type in ['text', 'vision']:
+            # For streaming responses, response_extract may be None
+            if response_extract is not None:
+                self.messages.append({"role": "assistant", "content": response_extract})
+            else:
+                # For streaming responses, you may need to handle updating messages elsewhere
+                pass  # Optionally handle this in the streaming processor
+        else:
+            # Handle other response types if any
+            pass
+
     def get_response(self, prompt: str | list = None,
                      response_type: str = None,
                      raw_output: bool = False, system_role: str = None, **kwargs) -> str | dict | tuple | list | Iterator:
         """
-        Retrieves a response from the OpenAI API based on the specified parameters. This is the main
-        method to interact with different OpenAI API functionalities like text, image, and vision responses.
+        Retrieves a response from the OpenAI API based on the provided prompt and parameters.
 
-        It routes the request to the appropriate internal method based on the response type and handles
-        the construction of prompts, messages, and API call parameters.
+        This method allows users to obtain different types of responses (text, image, vision) from the OpenAI API.
+        It supports both streaming and non-streaming responses, as well as raw and processed outputs.
 
-        Parameters:
-            response_type (str): The type of response to generate; options include 'text', 'image', or 'vision'.
-                                 Determines the OpenAI API endpoint to use. Defaults to 'text'.
-            prompt (str | list): The user prompt or a list of prompts representing user/assistant dialogue.
-            raw_output (bool): Determines whether to return the raw API response or a processed result.
-                               Defaults to True for raw JSON output.
-            system_role:
+        Parameters
+        ----------
+        prompt : str or list of str, optional
+            The input prompt(s) for which a response is requested. This can be a single string or a list of strings.
+        response_type : str, optional
+            The type of response to generate. Valid options are 'text', 'image', and 'vision'. If not provided,
+            the method will infer the response type based on the prompt.
+        raw_output : bool, optional
+            If `True`, the method returns the raw API response object. If `False`, it returns the extracted response
+            content. Default is `False`.
+        system_role : str, optional
+            The system role message to prepend to the conversation. If provided, it updates the first message in
+            `self.messages` with the specified system role. Otherwise, it inserts a new system role message.
+        **kwargs
+            Additional keyword arguments that are passed to the underlying API call. The allowed kwargs depend on
+            the `response_type`:
 
-        Keyword Arguments:
-            Keyword arguments specific to each response type are forwarded to the respective internal methods.
-            For 'text' and 'vision': these may include 'stream', 'format_style', 'text_prompt', etc.
-            For 'image': these may include 'image_model', 'image_count', 'image_size', 'image_quality', etc.
+            For `response_type='text'`, allowed kwargs include:
+                `stream` (bool): Whether to enable streaming of the response. Overrides the instance's `self.stream` attribute.
+                `top_p` (float): The nucleus sampling probability.
+                `max_tokens` (int): The maximum number of tokens to generate.
+                `stop` (str or list of str): Stop sequences for generation.
+                `presence_penalty` (float): Penalizes new tokens based on their presence in the text so far.
+                `frequency_penalty` (float): Penalizes new tokens based on their frequency in the text so far.
+                `response_format` (str): The format of the response.
+            For `response_type='image'`, allowed kwargs include:
+                `model` (str): The image generation model to use.
+                `count` (int): Number of images to generate.
+                `size` (str): Size of the generated images.
+                `quality` (str): Quality of the generated images.
+                `style` (str): Style of the generated images.
+                `response_format` (str): The format of the image response.
+                `stream` (bool): Whether to enable streaming of the response.
+            For `response_type='vision'`, allowed kwargs include:
+                `text_prompt` (str): The text prompt accompanying the image.
+                `image_prompt` (str): The image prompt (e.g., URL or path to image).
+                `stream` (bool): Whether to enable streaming of the response.
+                `top_p` (float): The nucleus sampling probability.
+                `max_tokens` (int): The maximum number of tokens to generate.
+                `stop` (str or list of str): Stop sequences for generation.
+                `presence_penalty` (float): Penalizes new tokens based on their presence in the text so far.
+                `frequency_penalty` (float): Penalizes new tokens based on their frequency in the text so far.
+                `response_format` (str): The format of the response.
 
-        Returns:
-            Depending on the response type and 'raw_output' flag:
-            - A string, dictionary, tuple, list, or an iterator containing the response data.
+        Returns
+        -------
+        str or dict or tuple or list or Iterator
+            If `stream=True` and `response_type` is 'text' or 'vision', returns a streaming object (`Iterator`).
+            If `raw_output=True`, returns the raw API response object (`dict` or other types depending on the API).
+            Otherwise, returns the processed response:
+                `str` for 'text' responses.
+                `dict` or `list` for 'image' and 'vision' responses.
+        Raises
+        ------
+        ValueError
+            If an invalid `response_type` is provided.
+        ChatEngineError
+            For any errors related to the ChatEngine, such as issues with API calls or parameter validation.
 
-        Raises:
-            The method may raise various exceptions based on internal validation and API call outcomes.
+        Notes
+        -----
+        The `stream` parameter can be overridden by passing it as a keyword argument, even if the class was instantiated with `self.stream=True`.
+        When `stream=True`, the method returns a streaming object and does not update `self.messages`. The `StreamProcessor` should be used to handle and update messages after the stream is processed.
+        For image responses, `self.messages` is updated differently based on the `revised_prompt` kwarg:
+            If `revised_prompt=True`, a description of the generated image is appended.
+            If `revised_prompt=False`, a placeholder message '[GENERATED IMAGE]' is appended.
 
-        Usage Example:
-            get_response(response_type='text', prompt='Tell me a joke.', raw_output=False)
         """
 
         # Override system_role if provided
@@ -987,34 +1131,44 @@ class ChatEngine:
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed_kwargs}
 
         # Call the appropriate API based on response_type
+        raw_response = None
+        start_time = time.time()
         if response_type == 'text':
             self.api_used = 'text'
-            self._text_api_call(text_prompt=prompt, **filtered_kwargs)
+            raw_response = self._text_api_call(text_prompt=prompt, **filtered_kwargs)
         elif response_type == 'image':
             self.api_used = 'image'
-            self._image_api_call(text_prompt=prompt, **filtered_kwargs)
+            raw_response = self._image_api_call(text_prompt=prompt, **filtered_kwargs)
         elif response_type == 'vision':
             self.api_used = 'vision'
-            self._vision_api_call(image_prompt=prompt, **filtered_kwargs)
+            raw_response = self._vision_api_call(image_prompt=prompt, **filtered_kwargs)
+        elapsed_time = time.time() - start_time
+        logging.info(f"API call for response type '{response_type}' took {elapsed_time:.2f} seconds")
 
-        # If streaming is enabled, return the streaming object
-        if self.stream and response_type in ['text', 'vision']:
+        self.raw_response = raw_response
+
+        # Determine the actual 'stream' value used
+        stream = kwargs.get('stream', self.stream)
+
+        # RESPONSE HANDLING
+        # 1. Handle raw_output flag
+        if raw_output:
+            # Do not modify self.messages, return the raw API response
+            return self.raw_response
+
+        # 2. Handle streaming responses
+        if stream and response_type in ['text', 'vision']:
+            # Store the streaming object in self.response
+            self.response = raw_response
+            # Do not update self.messages here; it will be handled by StreamProcessor
             return self.response
 
-        # Non-streaming response handling
-        if not raw_output:
-            assistant_reply = self.extract_response(response_type, **kwargs)
-            if response_type != 'image':
-                self.messages.append({"role": "assistant", "content": assistant_reply})
-            elif response_type == 'image':
-                if kwargs.get('revised_prompt', True):
-                    self.messages.append({"role": "assistant", "content": f'here is a description of the image i created for you: {assistant_reply[0][1]}'})
-                else:
-                    self.messages.append({"role": "assistant", "content": '[GENERATED IMAGE]'})
-
-            return assistant_reply
-        else:
-            # raw_output is True
-            assistant_reply = self.extract_response(response_type, **kwargs)
-            self.messages.append({"role": "assistant", "content": assistant_reply})
-            return self.response
+        # 3. Handle non-streaming responses
+        # Extract the response content
+        response_extract = self.extract_response(raw_response, response_type, **kwargs)
+        # Store the extracted response
+        self.response = response_extract
+        # Update self.messages consistently
+        self._update_assistant_messages(response_type, response_extract, **kwargs)
+        # Return the extracted response
+        return self.response
