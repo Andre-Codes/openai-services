@@ -10,6 +10,7 @@ from typing import Iterator, Any
 
 import openai
 from openai.types.chat import ChatCompletion
+from openai.types.images_response import ImagesResponse
 from openai import OpenAI
 import yaml
 
@@ -88,7 +89,7 @@ class ChatEngine:
 
     # Allowed kwargs for API calls
     ALLOWED_TEXT_KWARGS = {'response_format', 'stream', 'top_p', 'max_tokens', 'stop', 'presence_penalty', 'frequency_penalty'}
-    ALLOWED_IMAGE_KWARGS = {'model', 'n', 'size', 'quality', 'style', 'response_format'}
+    ALLOWED_IMAGE_KWARGS = {'model', 'n', 'size', 'quality', 'style', 'response_format', 'revised_prompt'}
     ALLOWED_VISION_KWARGS = {'text_prompt', 'stream', 'top_p', 'max_tokens', 'stop', 'presence_penalty', 'frequency_penalty'}
 
     def __init__(self, role_context=None, system_role=None, temperature: float = 0.7,
@@ -336,7 +337,7 @@ class ChatEngine:
             logging.error(f"OpenAI API error: {e}")
             raise
 
-    def _vision_api_call(self, text_prompt, image_prompt, stream: bool = None, top_p: float = None, **kwargs):
+    def _vision_api_call(self, image_prompt, text_prompt=None, stream: bool = None, top_p: float = None, **kwargs):
         """
         Makes an API call for vision-based responses using the specified image prompt and additional parameters.
 
@@ -452,7 +453,6 @@ class ChatEngine:
         size = kwargs.get('size', "1024x1024").lower()
         quality = kwargs.get('quality', "standard").lower()
         style = kwargs.get('style', 'vivid').lower()
-        revised_prompt = kwargs.get('revised_prompt', True)
         response_format = kwargs.get('response_format', 'url')
 
         # Translate size aliases
@@ -468,6 +468,7 @@ class ChatEngine:
         style = self._validate_model_option(style, model_opts.get('styles', []), "style", model)
         logging.info(f"Completed validation of selected options for model '{model}'.")
 
+        revised_prompt = kwargs.pop('revised_prompt', True)
         if not revised_prompt and model != 'dall-e-2':
             preface = """
             I NEED to test how the tool works with extremely simple prompts. 
@@ -483,6 +484,7 @@ class ChatEngine:
             "model": kwargs.get('model', 'dall-e-3'),
             "prompt": full_prompt,
         }
+        print(full_prompt)
 
         # Prepare API parameters using the helper method
         api_params = self._prepare_api_params(base_params, self.ALLOWED_IMAGE_KWARGS, **kwargs)
@@ -903,28 +905,33 @@ class ChatEngine:
         logging.warning("Invalid input type for image_file_paths.")
         return None
 
-    def extract_response(self, raw_response: ChatCompletion, response_type, **kwargs):
+    def extract_response(self, raw_response, **kwargs):
         """
         Extracts and formats the response from the OpenAI API based on the response type.
 
         Parameters:
-            raw_response:
-            response_type (str): The type of response ('text', 'image', or 'vision').
+            raw_response: The raw response from the OpenAI API.
             kwargs: Additional keyword arguments.
 
         Returns:
-            The formatted response based on the response type.
+            The formatted response based on the type of the raw response.
         """
-        logging.info(f"Extracting response for type: {response_type}")
+        logging.info(f"Extracting response for type: {type(raw_response).__name__}")
 
-        if response_type == 'text':
+        # Check if response is a ChatCompletion type (for text or vision responses)
+        if isinstance(raw_response, ChatCompletion):
             return raw_response.choices[0].message.content
-        elif response_type == 'image':
+
+        # Check if response is an Image type (for image generation responses)
+        elif isinstance(raw_response, ImagesResponse):
             return self._extract_image_response(raw_response, kwargs.get('revised_prompt', True))
-        elif response_type == 'vision':
-            return raw_response.choices[0].message.content
 
-    def _extract_image_response(self, raw_response: ChatCompletion, revised_prompt):
+        # Optionally raise an error if the response type is unexpected
+        else:
+            raise TypeError("Unsupported response type received. "
+                            "Expected 'ImagesResponse' or 'ChatCompletion'")
+
+    def _extract_image_response(self, raw_response: ImagesResponse, revised_prompt):
         """
         Extracts the image response, handling URLs and base64 JSON.
 
@@ -944,12 +951,9 @@ class ChatEngine:
             logging.info("Extracting 'url' image response")
             data = [getattr(image, 'url', None) for image in raw_response.data]
 
-        if revised_prompt:
-            logging.info("Including revised prompts in response (creates a list of tuples).")
-            revised_prompts = [getattr(image, 'revised_prompt', None) for image in raw_response.data]
-            return list(zip(data, revised_prompts))
-
-        return data
+        logging.info("Including revised prompts in response (creates a list of tuples).")
+        revised_prompts = [getattr(image, 'revised_prompt', None) for image in raw_response.data]
+        return list(zip(data, revised_prompts))
 
     def get_response_parallel(self, prompts: list, response_type='text', raw_output=False, **kwargs) -> dict:
         results = {}
@@ -997,11 +1001,10 @@ class ChatEngine:
             **kwargs: Additional keyword arguments.
         """
         if response_type == 'image':
-            if kwargs.get('revised_prompt', True):
-                description = f"Here is a description of the image I created for you: {response_extract[0][1]}"
-                self.messages.append({"role": "assistant", "content": description})
-            else:
-                self.messages.append({"role": "assistant", "content": "[GENERATED IMAGE]"})
+            image_descriptions = [f"Image {i + 1}: {descript[1]}" for i, descript in enumerate(response_extract)]
+            description = f"Here is a description of the image(s) created for you:\n" + "\n".join(image_descriptions)
+            self.messages.append({"role": "assistant", "content": description})
+
         elif response_type in ['text', 'vision']:
             # For streaming responses, response_extract may be None
             if response_extract is not None:
@@ -1165,7 +1168,7 @@ class ChatEngine:
 
         # 3. Handle non-streaming responses
         # Extract the response content
-        response_extract = self.extract_response(raw_response, response_type, **kwargs)
+        response_extract = self.extract_response(raw_response, **kwargs)
         # Store the extracted response
         self.response = response_extract
         # Update self.messages consistently
