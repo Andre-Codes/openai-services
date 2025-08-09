@@ -66,6 +66,7 @@ def get_text(
     """
     model = model or DefaultModel()
     messages = format_messages(input_obj)
+    print(f"Sending messages: {messages}")
     adapter = history or NoHistory()
     messages = adapter.trim(messages)
 

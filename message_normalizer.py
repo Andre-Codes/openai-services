@@ -10,13 +10,21 @@ def _to_input_text(text: str) -> ContentPart:
     return {"type": "input_text", "text": text}
 
 def _to_input_image(obj: Any) -> ContentPart:
-    # Accept URL strings or dicts with url/data
+    # URL string
     if isinstance(obj, str) and (obj.startswith("http://") or obj.startswith("https://")):
-        return {"type": "input_image", "image_url": {"url": obj}}
-    if isinstance(obj, dict) and ("image_url" in obj or "image_data" in obj):
-        # passthrough for advanced callers
-        return {"type": "input_image", **obj}
+        return {"type": "input_image", "image_url": obj}  # ← string, not {"url": ...}
+
+    # Dict passthroughs
+    if isinstance(obj, dict):
+        # allow direct string: {"image_url": "https://..."}
+        if isinstance(obj.get("image_url"), str):
+            return {"type": "input_image", "image_url": obj["image_url"]}
+        # base64 form: {"image_data": {"b64": "...", "mime_type": "image/png"}}
+        if "image_data" in obj:
+            return {"type": "input_image", "image_data": obj["image_data"]}
+
     raise NormalizationError(f"Unrecognized image input: {obj!r}")
+
 
 def _ensure_list(x: Any) -> List[Any]:
     return x if isinstance(x, list) else [x]
@@ -60,11 +68,12 @@ def format_messages(input_obj: InputType) -> List[Message]:
         # Mixed text+image -> fold into one user turn
         parts: List[ContentPart] = []
         for item in input_obj:
-            if isinstance(item, str):
+            if isinstance(item, str) and (item.startswith("http://") or item.startswith("https://")):
+                print(f"Detected image URL: {item}")
+                parts.append(_to_input_image(item))
+            elif isinstance(item, str):
                 parts.append(_to_input_text(item))
             elif isinstance(item, dict) and ("image_url" in item or "image_data" in item):
-                parts.append(_to_input_image(item))
-            elif isinstance(item, str) and (item.startswith("http://") or item.startswith("https://")):
                 parts.append(_to_input_image(item))
             else:
                 raise NormalizationError(f"Unsupported list item: {item!r}")
