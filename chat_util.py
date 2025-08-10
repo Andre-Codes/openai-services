@@ -6,6 +6,7 @@ from openai import OpenAI
 import json
 import time
 import random
+import warnings
 
 from .config import CONFIG
 from .models import DefaultModel
@@ -14,7 +15,7 @@ from .errors import (
     RateLimitError,
 )
 from .message_normalizer import format_messages
-from .history import HistoryAdapter, NoHistory
+from .history import HistoryAdapter, NoHistory, ChatHistory
 from .tools import ToolSpec
 from .stream_router import TextStreamAssembler, JsonStreamAssembler
 
@@ -151,6 +152,30 @@ def _normalize_event(event: Any) -> Dict[str, Any]:
 
     return out
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Conversation History helpers
+
+# helper: make user-turn parts from flexible input
+def _as_user_parts(input_obj: Any) -> List[Dict[str, Any]]:
+    msgs = format_messages(input_obj)
+    # Expect one user message (format_messages ensures that for simple inputs)
+    if not msgs or msgs[-1].get("role") != "user":
+        # If caller passed a full conversation, keep last user turn’s parts
+        for m in reversed(msgs):
+            if m.get("role") == "user":
+                return m["content"]
+        # fallback
+        return [{"type":"input_text","text": str(input_obj)}]
+    return msgs[-1]["content"]
+
+def _build_messages(input_obj: Any, conversation: Optional[ChatHistory], adapter: Optional[HistoryAdapter]) -> List[Message]:
+    if conversation:
+        base = conversation.messages()
+        parts = _as_user_parts(input_obj)
+        return base + [{"role":"user","content": parts}]
+    # legacy: stateless call with trimming adapter
+    msgs = format_messages(input_obj)
+    return (adapter or NoHistory()).trim(msgs)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
@@ -161,45 +186,233 @@ def get_text(
     model: str | None = None,
     temperature: Optional[float] = None,
     max_output_tokens: Optional[int] = None,
-    history: Optional[HistoryAdapter] = None,
-    timeout: Optional[float] = None,  # reserved for future per-call override
-    retry: Optional[Tuple[int, float]] = None,  # (attempts, backoff_base)
+    history: Optional[HistoryAdapter] = None,   # kept for backward-compat (stateless trimming)
+    conversation: Optional[ChatHistory] = None, # NEW: stateful memory
+    timeout: Optional[float] = None,
+    retry: Optional[Tuple[int, float]] = None,
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
     stream: bool = False,
     sink: Optional[Sink] = None,
 ) -> Dict[str, Any]:
-    """
-    Returns final text + metadata.
-    - Default: non-streaming single return.
-    - If stream=True: emits deltas to `sink` and returns final metadata + full text.
-    """
     model = model or DefaultModel()
-    messages = format_messages(input_obj)
-    adapter = history or NoHistory()
-    messages = adapter.trim(messages)
-
     client = _client_get()
     attempts, backoff = retry or (CONFIG.retry_max_attempts, CONFIG.retry_backoff_base)
 
+    # build user parts & outgoing messages
+    user_parts = _as_user_parts(input_obj)
+    messages = (
+        conversation.messages() + [{"role": "user", "content": user_parts}]
+        if conversation else (history or NoHistory()).trim(format_messages(input_obj))
+    )
+
+    # server-side chaining flags
+    store_flag = bool(conversation and conversation.chain_server_side)
+    prev_id = conversation.previous_response_id() if conversation else None
+
     if stream:
-        return _with_retries(
-            lambda: _stream_text(
-                client, model=model, messages=messages,
-                temperature=temperature, max_output_tokens=max_output_tokens,
-                sink=sink
-            ),
-            attempts=attempts, backoff_base=backoff
-        )
+        def _run():
+            assembler = TextStreamAssembler(on_delta=sink)
+            with client.responses.stream(
+                model=model,
+                input=messages,
+                store=store_flag,
+                previous_response_id=prev_id,
+                temperature=temperature if temperature is not None else CONFIG.temperature,
+                max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
+                tool_choice=tool_choice,
+            ) as s:
+                for ev in s:
+                    assembler.on_event(_normalize_event(ev))
+                final = s.get_final_response()
+                if getattr(final, "usage", None):
+                    assembler.usage = final.usage
+                if getattr(final, "id", None):
+                    assembler.request_id = final.id
+            text = assembler.final_text()
+            # auto-append to conversation
+            if conversation:
+                conversation.add_user_parts(user_parts)
+                conversation.add_assistant_text(text)
+                conversation.set_previous_response_id(assembler.request_id)
+            return {"text": text, "usage": assembler.usage, "request_id": assembler.request_id, "model": model}
+        return _with_retries(_run, attempts=attempts, backoff_base=backoff)
 
     def _do():
         resp = client.responses.create(
             model=model,
             input=messages,
+            store=store_flag,
+            previous_response_id=prev_id,
             temperature=temperature if temperature is not None else CONFIG.temperature,
             max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
             tool_choice=tool_choice,
         )
         text = resp.output_text or ""
+        if conversation:
+            conversation.add_user_parts(user_parts)
+            conversation.add_assistant_text(text)
+            conversation.set_previous_response_id(getattr(resp, "id", None))
+        return {
+            "text": text,
+            "usage": getattr(resp, "usage", None),
+            "request_id": getattr(resp, "id", None),
+            "model": model,
+        }
+    return _with_retries(_do, attempts=attempts, backoff_base=backoff)
+
+# ---- get_structured ----
+def get_structured(
+    input_obj: Any,
+    schema: Dict[str, Any],
+    *,
+    model: str | None = None,
+    history: Optional[HistoryAdapter] = None,
+    conversation: Optional[ChatHistory] = None,  # NEW
+    temperature: Optional[float] = None,
+    max_output_tokens: Optional[int] = None,
+    timeout: Optional[float] = None,
+    retry: Optional[Tuple[int, float]] = None,
+    stream: bool = False,
+    sink: Optional[Sink] = None,
+) -> Dict[str, Any]:
+    model = model or DefaultModel()
+    client = _client_get()
+    attempts, backoff = retry or (CONFIG.retry_max_attempts, CONFIG.retry_backoff_base)
+
+    user_parts = _as_user_parts(input_obj)
+    messages = (
+        conversation.messages() + [{"role": "user", "content": user_parts}]
+        if conversation else (history or NoHistory()).trim(format_messages(input_obj))
+    )
+
+    # Until your SDK exposes response_format, use the tool-forced JSON pattern:
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "structured_output",
+            "description": "Return a JSON object following the provided schema",
+            "parameters": {**schema, "additionalProperties": schema.get("additionalProperties", False)},
+        },
+    }]
+    tool_choice = {"type": "function", "function": {"name": "structured_output"}}
+
+    store_flag = bool(conversation and conversation.chain_server_side)
+    prev_id = conversation.previous_response_id() if conversation else None
+
+    if stream:
+        def _run():
+            assembler = JsonStreamAssembler(on_delta=sink)
+            with client.responses.stream(
+                model=model,
+                input=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                store=store_flag,
+                previous_response_id=prev_id,
+                temperature=temperature if temperature is not None else CONFIG.temperature,
+                max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
+            ) as s:
+                for ev in s:
+                    assembler.on_event(_normalize_event(ev))
+                final = s.get_final_response()
+                if getattr(final, "usage", None):
+                    assembler.usage = final.usage
+                if getattr(final, "id", None):
+                    assembler.request_id = final.id
+            text = assembler.final_text()
+            try:
+                data = json.loads(text or "{}")
+            except Exception as e:
+                raise SchemaValidationError(f"Streamed JSON invalid: {e}", partial_text=text) from e
+            if conversation:
+                # Best-effort: also append assistant text for transcript readability
+                conversation.add_user_parts(user_parts)
+                conversation.add_assistant_text(text)
+                conversation.set_previous_response_id(assembler.request_id)
+            return {"json": data, "usage": assembler.usage, "request_id": assembler.request_id, "model": model}
+        return _with_retries(_run, attempts=attempts, backoff_base=backoff)
+
+    def _do():
+        resp = client.responses.create(
+            model=model,
+            input=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            store=store_flag,
+            previous_response_id=prev_id,
+            temperature=temperature if temperature is not None else CONFIG.temperature,
+            max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
+        )
+        # Parse strict JSON from function args (prefer parsed if SDK returns it)
+        args = None
+        if getattr(resp, "tool_calls", None):
+            for c in resp.tool_calls:
+                if getattr(c, "type", None) == "function":
+                    payload = getattr(c.function, "arguments", None)
+                    args = payload
+                    break
+        text = args or resp.output_text or "{}"
+        try:
+            data = json.loads(text)
+        except Exception as e:
+            raise SchemaValidationError(f"Model did not return valid JSON text: {e}", partial_text=text) from e
+
+        if conversation:
+            conversation.add_user_parts(user_parts)
+            conversation.add_assistant_text(text)
+            conversation.set_previous_response_id(getattr(resp, "id", None))
+        return {"json": data, "usage": getattr(resp, "usage", None), "request_id": getattr(resp, "id", None), "model": model}
+    return _with_retries(_do, attempts=attempts, backoff_base=backoff)
+
+def chat(
+    messages: List[Message],
+    *,
+    model: str | None = None,
+    history: Optional[HistoryAdapter] = None,
+    conversation: Optional[ChatHistory] = None,   # NEW (optional)
+    append_assistant_to_conversation: bool = False,  # NEW (default off)
+    temperature: Optional[float] = None,
+    max_output_tokens: Optional[int] = None,
+    timeout: Optional[float] = None,
+    retry: Optional[Tuple[int, float]] = None,
+) -> Dict[str, Any]:
+    """
+    Low-level call with caller-supplied messages.
+    - If `conversation` is provided, we *only*:
+        • pass server-side chaining flags (store/previous_response_id)
+        • optionally append assistant reply to conversation (if enabled)
+      We do NOT merge `conversation` turns into `messages` to avoid duplicates.
+    """
+    if not isinstance(messages, list) or not messages:
+        raise NormalizationError("chat(messages=...) requires a non-empty list of message dicts.")
+
+    model = model or DefaultModel()
+    adapter = history or NoHistory()
+    eff = adapter.trim(messages)
+
+    # server-side chaining if requested
+    store_flag = bool(conversation and conversation.chain_server_side)
+    prev_id = conversation.previous_response_id() if conversation else None
+
+    client = _client_get()
+    attempts, backoff = retry or (CONFIG.retry_max_attempts, CONFIG.retry_backoff_base)
+
+    def _do():
+        resp = client.responses.create(
+            model=model,
+            input=eff,
+            store=store_flag,
+            previous_response_id=prev_id,
+            temperature=temperature if temperature is not None else CONFIG.temperature,
+            max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
+        )
+        text = resp.output_text or ""
+
+        # Optional: only append assistant text; do NOT add the user turn here
+        if conversation and append_assistant_to_conversation:
+            conversation.add_assistant_text(text)
+            conversation.set_previous_response_id(getattr(resp, "id", None))
+
         return {
             "text": text,
             "usage": getattr(resp, "usage", None),
@@ -209,121 +422,6 @@ def get_text(
 
     return _with_retries(_do, attempts=attempts, backoff_base=backoff)
 
-def get_structured(
-    input_obj: Any,
-    schema: Dict[str, Any],
-    *,
-    model: str | None = None,
-    history: Optional[HistoryAdapter] = None,
-    temperature: Optional[float] = None,
-    max_output_tokens: Optional[int] = None,
-    timeout: Optional[float] = None,  # reserved for future per-call override
-    retry: Optional[Tuple[int, float]] = None,
-    stream: bool = False,
-    sink: Optional[Sink] = None,
-) -> Dict[str, Any]:
-    """
-    Guaranteed JSON via Structured Outputs (JSON Schema strict mode).
-    Raises SchemaValidationError if invalid.
-    - Default: non-streaming single return.
-    - If stream=True: emits deltas to `sink`, validates JSON at end, returns parsed dict.
-    """
-    model = model or DefaultModel()
-    messages = format_messages(input_obj)
-    adapter = history or NoHistory()
-    messages = adapter.trim(messages)
-
-    client = _client_get()
-    attempts, backoff = retry or (CONFIG.retry_max_attempts, CONFIG.retry_backoff_base)
-
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "structured_output",
-            "schema": {**schema, "additionalProperties": schema.get("additionalProperties", False)},
-            "strict": True,
-        },
-    }
-
-    if stream:
-        return _with_retries(
-            lambda: _stream_json(
-                client,
-                model=model,
-                messages=messages,
-                response_format=response_format,
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
-                sink=sink,
-            ),
-            attempts=attempts, backoff_base=backoff
-        )
-
-    def _do():
-        resp = client.responses.create(
-            model=model,
-            input=messages,
-            temperature=temperature if temperature is not None else CONFIG.temperature,
-            max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
-            response_format=response_format,
-        )
-        try:
-            data = json.loads(resp.output_text or "{}")
-        except Exception as e:
-            raise SchemaValidationError(
-                f"Model did not return valid JSON text: {e}",
-                partial_text=resp.output_text
-            ) from e
-        return {
-            "json": data,
-            "usage": getattr(resp, "usage", None),
-            "request_id": getattr(resp, "id", None),
-            "model": model,
-        }
-
-    return _with_retries(_do, attempts=attempts, backoff_base=backoff)
-
-def chat(
-    messages: List[Message],
-    *,
-    model: str | None = None,
-    response_format: Optional[Dict[str, Any]] = None,
-    history: Optional[HistoryAdapter] = None,
-    temperature: Optional[float] = None,
-    max_output_tokens: Optional[int] = None,
-    timeout: Optional[float] = None,
-    retry: Optional[Tuple[int, float]] = None,
-) -> Dict[str, Any]:
-    """
-    For callers who already have role-tagged messages[]. We still trim history
-    and call Responses once.
-    """
-    if not isinstance(messages, list) or not messages:
-        raise NormalizationError("chat(messages=...) requires a non-empty list of message dicts.")
-
-    model = model or DefaultModel()
-    adapter = history or NoHistory()
-    eff = adapter.trim(messages)
-
-    client = _client_get()
-    attempts, backoff = retry or (CONFIG.retry_max_attempts, CONFIG.retry_backoff_base)
-
-    def _do():
-        resp = client.responses.create(
-            model=model,
-            input=eff,
-            temperature=temperature if temperature is not None else CONFIG.temperature,
-            max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
-            response_format=response_format,
-        )
-        return {
-            "text": resp.output_text or "",
-            "usage": getattr(resp, "usage", None),
-            "request_id": getattr(resp, "id", None),
-            "model": model,
-        }
-
-    return _with_retries(_do, attempts=attempts, backoff_base=backoff)
 
 def call_with_tools(
     input_or_messages: Any,
