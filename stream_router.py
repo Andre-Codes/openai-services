@@ -12,19 +12,24 @@ class TextStreamAssembler:
         self.request_id: Optional[str] = None
         self.on_delta = on_delta
 
-    def on_event(self, ev: StreamEvent) -> None:
+    def on_event(self, ev: Dict[str, Any]) -> None:
         t = ev.get("type")
         if t == "response.output_text.delta":
-            chunk = ev["delta"]
+            chunk = ev.get("delta", "")
             self._buf.append(chunk)
             if self.on_delta:
                 self.on_delta(chunk)
         elif t == "response.completed":
-            self.usage = ev.get("usage")
-            self.request_id = ev.get("response", {}).get("id") or ev.get("request_id")
+            # usage may arrive here, or only on get_final_response()
+            self.usage = ev.get("usage") or getattr(ev, "usage", None)
+            # response could be dict OR pydantic object OR missing
+            resp = ev.get("response") if isinstance(ev, dict) else None
+            rid = None
+            if resp is not None:
+                rid = resp.get("id") if isinstance(resp, dict) else getattr(resp, "id", None)
+            self.request_id = rid or ev.get("request_id") or getattr(ev, "request_id", None)
         elif t == "response.error":
             raise RuntimeError(str(ev.get("error", "stream error")))
-        # ignore other event types for plain text mode
 
     def final_text(self) -> str:
         return "".join(self._buf)

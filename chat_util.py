@@ -71,8 +71,7 @@ def _stream_text(
         max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
     ) as stream:
         for event in stream:
-            ev = _normalize_event(event)
-            assembler.on_event(ev)
+            assembler.on_event(_normalize_event(event))
         final = stream.get_final_response()
         if getattr(final, "usage", None):
             assembler.usage = final.usage
@@ -104,8 +103,7 @@ def _stream_json(
         max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
     ) as stream:
         for event in stream:
-            ev = _normalize_event(event)
-            assembler.on_event(ev)
+            assembler.on_event(_normalize_event(event))
         final = stream.get_final_response()
         if getattr(final, "usage", None):
             assembler.usage = final.usage
@@ -124,20 +122,35 @@ def _stream_json(
     }
 
 def _normalize_event(event: Any) -> Dict[str, Any]:
-    # Handle dict, objects with to_dict(), or plain attribute bags
+    # Start with dict if possible
     if isinstance(event, dict):
-        return event
-    if hasattr(event, "to_dict"):
+        out = dict(event)
+    elif hasattr(event, "to_dict"):
         try:
-            return event.to_dict()  # some SDKs expose this
+            out = event.to_dict()
         except Exception:
-            pass
-    # Last-resort: pick common attributes
-    out: Dict[str, Any] = {}
-    for attr in ("type", "delta", "arguments_delta", "call_id", "name", "error", "response", "usage", "request_id"):
-        if hasattr(event, attr):
+            out = {}
+    else:
+        out = {}
+
+    # Always set type if available
+    out["type"] = out.get("type") or getattr(event, "type", None)
+
+    # Normalize common fields
+    for attr in ("delta", "arguments_delta", "call_id", "name", "error", "usage", "request_id"):
+        if attr not in out and hasattr(event, attr):
             out[attr] = getattr(event, attr)
+
+    # response may be a Pydantic object → extract id
+    resp = out.get("response") or getattr(event, "response", None)
+    if resp is not None:
+        if isinstance(resp, dict):
+            out["response"] = {"id": resp.get("id")}
+        else:
+            out["response"] = {"id": getattr(resp, "id", None)}
+
     return out
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
