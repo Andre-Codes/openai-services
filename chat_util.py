@@ -32,6 +32,10 @@ def _client_get() -> OpenAI:
         _client = OpenAI(timeout=CONFIG.timeout_seconds, **CONFIG.client_kwargs)
     return _client
 
+def _clean_kwargs(d: dict) -> dict:
+    """Remove None values from kwargs to avoid noisy 400s."""
+    return {k: v for k, v in (d or {}).items() if v is not None}
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Retry wrapper with exp backoff + jitter (429/5xx)
 def _with_retries(fn, *, attempts: int, backoff_base: float):
@@ -53,7 +57,7 @@ def _with_retries(fn, *, attempts: int, backoff_base: float):
     return run()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Streaming helpers
+# Streaming helpers (kept for backward compatibility but deprecated)
 
 def _stream_text(
     client: OpenAI,
@@ -64,6 +68,7 @@ def _stream_text(
     max_output_tokens: Optional[int],
     sink: Optional[Sink],
 ) -> Dict[str, Any]:
+    """Deprecated: use get_text with stream=True instead."""
     assembler = TextStreamAssembler(on_delta=sink)
     with client.responses.stream(
         model=model,
@@ -95,6 +100,7 @@ def _stream_json(
     max_output_tokens: Optional[int],
     sink: Optional[Sink],
 ) -> Dict[str, Any]:
+    """Deprecated: use get_structured with stream=True instead."""
     assembler = JsonStreamAssembler(on_delta=sink)
     with client.responses.stream(
         model=model,
@@ -184,7 +190,6 @@ def get_text(
     input_obj: Any,
     *,
     model: str | None = None,
-    temperature: Optional[float] = None,
     max_output_tokens: Optional[int] = None,
     history: Optional[HistoryAdapter] = None,   # kept for backward-compat (stateless trimming)
     conversation: Optional[ChatHistory] = None, # NEW: stateful memory
@@ -193,6 +198,7 @@ def get_text(
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
     stream: bool = False,
     sink: Optional[Sink] = None,
+    **request_kwargs,   # <- NEW: passthrough for temperature, user, etc.
 ) -> Dict[str, Any]:
     model = model or DefaultModel()
     client = _client_get()
@@ -209,18 +215,21 @@ def get_text(
     store_flag = bool(conversation and conversation.chain_server_side)
     prev_id = conversation.previous_response_id() if conversation else None
 
+    # Build base kwargs with defaults, then merge user overrides
+    base_kwargs = _clean_kwargs({
+        "model": model,
+        "input": messages,
+        "store": store_flag or None,
+        "previous_response_id": prev_id,
+        "max_output_tokens": max_output_tokens or CONFIG.max_output_tokens,
+        "tool_choice": tool_choice,
+        **request_kwargs,  # user overrides
+    })
+
     if stream:
         def _run():
             assembler = TextStreamAssembler(on_delta=sink)
-            with client.responses.stream(
-                model=model,
-                input=messages,
-                store=store_flag,
-                previous_response_id=prev_id,
-                temperature=temperature if temperature is not None else CONFIG.temperature,
-                max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
-                tool_choice=tool_choice,
-            ) as s:
+            with client.responses.stream(**base_kwargs) as s:
                 for ev in s:
                     assembler.on_event(_normalize_event(ev))
                 final = s.get_final_response()
@@ -238,15 +247,7 @@ def get_text(
         return _with_retries(_run, attempts=attempts, backoff_base=backoff)
 
     def _do():
-        resp = client.responses.create(
-            model=model,
-            input=messages,
-            store=store_flag,
-            previous_response_id=prev_id,
-            temperature=temperature if temperature is not None else CONFIG.temperature,
-            max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
-            tool_choice=tool_choice,
-        )
+        resp = client.responses.create(**base_kwargs)
         text = resp.output_text or ""
         if conversation:
             conversation.add_user_parts(user_parts)
@@ -268,12 +269,12 @@ def get_structured(
     model: str | None = None,
     history: Optional[HistoryAdapter] = None,
     conversation: Optional[ChatHistory] = None,  # NEW
-    temperature: Optional[float] = None,
     max_output_tokens: Optional[int] = None,
     timeout: Optional[float] = None,
     retry: Optional[Tuple[int, float]] = None,
     stream: bool = False,
     sink: Optional[Sink] = None,
+    **request_kwargs,   # <- NEW: passthrough for temperature, user, etc.
 ) -> Dict[str, Any]:
     model = model or DefaultModel()
     client = _client_get()
@@ -299,19 +300,23 @@ def get_structured(
     store_flag = bool(conversation and conversation.chain_server_side)
     prev_id = conversation.previous_response_id() if conversation else None
 
+    # Build base kwargs with defaults, then merge user overrides
+    base_kwargs = _clean_kwargs({
+        "model": model,
+        "input": messages,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "store": store_flag or None,
+        "previous_response_id": prev_id,
+        "max_output_tokens": max_output_tokens or CONFIG.max_output_tokens,
+        "temperature": CONFIG.temperature,  # default, can be overridden
+        **request_kwargs,  # user overrides
+    })
+
     if stream:
         def _run():
             assembler = JsonStreamAssembler(on_delta=sink)
-            with client.responses.stream(
-                model=model,
-                input=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                store=store_flag,
-                previous_response_id=prev_id,
-                temperature=temperature if temperature is not None else CONFIG.temperature,
-                max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
-            ) as s:
+            with client.responses.stream(**base_kwargs) as s:
                 for ev in s:
                     assembler.on_event(_normalize_event(ev))
                 final = s.get_final_response()
@@ -333,16 +338,7 @@ def get_structured(
         return _with_retries(_run, attempts=attempts, backoff_base=backoff)
 
     def _do():
-        resp = client.responses.create(
-            model=model,
-            input=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            store=store_flag,
-            previous_response_id=prev_id,
-            temperature=temperature if temperature is not None else CONFIG.temperature,
-            max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
-        )
+        resp = client.responses.create(**base_kwargs)
         # Parse strict JSON from function args (prefer parsed if SDK returns it)
         args = None
         if getattr(resp, "tool_calls", None):
@@ -371,10 +367,10 @@ def chat(
     history: Optional[HistoryAdapter] = None,
     conversation: Optional[ChatHistory] = None,   # NEW (optional)
     append_assistant_to_conversation: bool = False,  # NEW (default off)
-    temperature: Optional[float] = None,
     max_output_tokens: Optional[int] = None,
     timeout: Optional[float] = None,
     retry: Optional[Tuple[int, float]] = None,
+    **request_kwargs,   # <- NEW: passthrough for temperature, user, etc.
 ) -> Dict[str, Any]:
     """
     Low-level call with caller-supplied messages.
@@ -397,15 +393,19 @@ def chat(
     client = _client_get()
     attempts, backoff = retry or (CONFIG.retry_max_attempts, CONFIG.retry_backoff_base)
 
+    # Build base kwargs with defaults, then merge user overrides
+    base_kwargs = _clean_kwargs({
+        "model": model,
+        "input": eff,
+        "store": store_flag or None,
+        "previous_response_id": prev_id,
+        "max_output_tokens": max_output_tokens or CONFIG.max_output_tokens,
+        "temperature": CONFIG.temperature,  # default, can be overridden
+        **request_kwargs,  # user overrides
+    })
+
     def _do():
-        resp = client.responses.create(
-            model=model,
-            input=eff,
-            store=store_flag,
-            previous_response_id=prev_id,
-            temperature=temperature if temperature is not None else CONFIG.temperature,
-            max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
-        )
+        resp = client.responses.create(**base_kwargs)
         text = resp.output_text or ""
 
         # Optional: only append assistant text; do NOT add the user turn here
@@ -432,10 +432,10 @@ def call_with_tools(
     auto_execute: bool = False,
     max_round_trips: int = 1,
     history: Optional[HistoryAdapter] = None,
-    temperature: Optional[float] = None,
     max_output_tokens: Optional[int] = None,
     timeout: Optional[float] = None,
     retry: Optional[Tuple[int, float]] = None,
+    **request_kwargs,   # <- NEW: passthrough for temperature, user, etc.
 ) -> Dict[str, Any]:
     """
     Returns tool_calls (parsed) by default. If auto_execute=True and handlers
@@ -462,15 +462,18 @@ def call_with_tools(
     client = _client_get()
     attempts, backoff = retry or (CONFIG.retry_max_attempts, CONFIG.retry_backoff_base)
 
+    # Build base kwargs for API calls
+    base_kwargs = _clean_kwargs({
+        "model": model,
+        "tools": tool_defs,
+        "tool_choice": tool_choice,
+        "max_output_tokens": max_output_tokens or CONFIG.max_output_tokens,
+        "temperature": CONFIG.temperature,  # default, can be overridden
+        **request_kwargs,  # user overrides
+    })
+
     def _single_pass(msgs: List[Message]) -> Any:
-        return client.responses.create(
-            model=model,
-            input=msgs,
-            tools=tool_defs,
-            tool_choice=tool_choice,
-            temperature=temperature if temperature is not None else CONFIG.temperature,
-            max_output_tokens=max_output_tokens or CONFIG.max_output_tokens,
-        )
+        return client.responses.create(input=msgs, **base_kwargs)
 
     def _parse_tool_calls(resp) -> List[Dict[str, Any]]:
         calls = []

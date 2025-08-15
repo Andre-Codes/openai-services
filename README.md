@@ -47,7 +47,33 @@ $env:OPENAI_API_KEY="sk-..."
 In code:
 
 ```python
+In code:
+
+```python
 from openai_services import get_text, get_structured, chat
+```
+
+## New in this version: **request_kwargs passthrough
+
+All main functions (`get_text`, `get_structured`, `chat`, `call_with_tools`) now accept arbitrary keyword arguments via `**request_kwargs`. This provides a clean way to pass OpenAI API parameters like `temperature`, `user`, `presence_penalty`, or any future parameters without cluttering the function signatures.
+
+**Benefits:**
+- Clean, stable public API 
+- Forward compatibility with new OpenAI parameters
+- No need to update the library when OpenAI adds new features
+- Automatic filtering of `None` values to prevent API errors
+
+**Examples:**
+```python
+# Set temperature for creative responses
+get_text("Write a haiku", temperature=0.8)
+
+# Pass user ID for tracking  
+get_text("Hello", user="session-123", temperature=0.1)
+
+# Any current or future OpenAI parameters work
+get_structured(prompt, schema, temperature=0.2, presence_penalty=0.1)
+```
 from openai_services.history import ChatHistory, RollingTokenHistory
 from openai_services.sinks import terminal_sink, jupyter_sink, streamlit_sink, buffer_sink
 from openai_services.models import MODELS, DefaultModel
