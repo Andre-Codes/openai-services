@@ -1,3 +1,5 @@
+# Ignore VS Code workspace files
+*.code-workspace
 # Default ignored files
 /shelf/
 /workspace.xml
